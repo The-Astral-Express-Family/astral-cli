@@ -1,7 +1,7 @@
 {
   "snapshot_version": 1,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "75269c4e4fc948ba07bde4f9125e0d7ff94ece79",
+  "source_commit": "946e544",
   "published_at": "2026-09-07",
   "protocol_version": 1,
   "min_cli_protocol_version": 1,
@@ -22,5 +22,19 @@
     "idempotency": "Idempotency-Key 头已在契约中定义，服务端 v0.1 尚未强制；CLI 可先不发送",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应"
   },
-  "breaking_changes": []
+  "breaking_changes": [],
+  "synced_at": "2026-09-07",
+  "revisions": [
+    {
+      "date": "2026-09-07",
+      "from_commit": "75269c4",
+      "to_commit": "946e544",
+      "changes": [
+        "新增事件类型 tag.created / tag.renamed / tag.deleted",
+        "capabilities.features 开放 task_lease",
+        "task search 与 tags 端点从 501 桩转为实装（路径/形状未变）",
+        "SSE 事件改为 outbox 统一路径，可见延迟 ≤500ms"
+      ]
+    }
+  ]
 }
