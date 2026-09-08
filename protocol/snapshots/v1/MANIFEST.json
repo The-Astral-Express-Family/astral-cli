@@ -1,7 +1,7 @@
 {
   "snapshot_version": 1,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "dbea374",
+  "source_commit": "f9b01df",
   "published_at": "2026-09-07",
   "protocol_version": 1,
   "min_cli_protocol_version": 1,
@@ -21,7 +21,8 @@
     "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
     "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）",
     "idempotency": "Idempotency-Key 已实装：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx （响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束",
-    "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应"
+    "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应",
+    "approvals": "发起需 workspace:manage_members，裁决仅限 workspace owner；approve 同事务执行 promote；TTL 72h 惰性过期；重复裁决 409 APPROVAL_EXPIRED"
   },
   "breaking_changes": [],
   "synced_at": "2026-09-09",
@@ -57,7 +58,8 @@
         "presence 语义定为 (actor, workspace) 一行（migration 00010）",
         "私信发送校验收件人 workspace 可达性（成员或绑定 credential），不可达 404",
         "refresh 并发轮换改条件更新：输家 401，不触发整族撤销",
-        "error.schema.json 去除过时 todo_phase_4 注记"
+        "error.schema.json 去除过时 todo_phase_4 注记",
+        "T-ws-6：新增 approvals 端点（POST/GET /workspaces/{id}/approvals、POST /approvals/{id}/approve|deny，architecture §22）与错误码 APPROVAL_EXPIRED（409）；MVP 仅开放 membership.promote_owner"
       ]
     }
   ]

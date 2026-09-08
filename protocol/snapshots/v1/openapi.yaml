@@ -43,6 +43,7 @@ tags:
   - name: documents
   - name: events
   - name: agents
+  - name: approvals
 
 security:
   - bearerAuth: []
@@ -364,6 +365,71 @@ paths:
       operationId: removeMember
       responses:
         "204": { description: 已移除 }
+
+  /workspaces/{workspace_id}/approvals:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [approvals]
+      summary: 发起高风险动作审批（MVP：membership.promote_owner）
+      operationId: createApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApprovalCreate" }
+      responses:
+        "201":
+          description: 已创建（status=requested）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+    get:
+      tags: [approvals]
+      summary: 审批列表（可按 status 过滤）
+      operationId: listApprovals
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [requested, approved, rejected, expired, executed] }
+      responses:
+        "200":
+          description: 审批分页列表
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApprovalPage" }
+
+  /approvals/{approval_id}/approve:
+    post:
+      tags: [approvals]
+      summary: 批准并在同事务执行（仅 workspace owner）
+      operationId: approveApproval
+      parameters:
+        - { name: approval_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      responses:
+        "200":
+          description: 已批准并执行（status=executed）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /approvals/{approval_id}/deny:
+    post:
+      tags: [approvals]
+      summary: 拒绝（仅 workspace owner）
+      operationId: denyApproval
+      parameters:
+        - { name: approval_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      responses:
+        "200":
+          description: 已拒绝（status=rejected）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /workspaces/{workspace_id}/tasks:
     parameters:
@@ -935,6 +1001,7 @@ components:
         - TASK_ALREADY_CLAIMED
         - TASK_LEASE_EXPIRED
         - TAG_PROPOSAL_EXPIRED
+        - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
         - TAG_ALREADY_EXISTS
         - REVISION_CONFLICT
         - DOCUMENT_CONFLICT
@@ -1320,6 +1387,44 @@ components:
         target_id: { $ref: "#/components/schemas/IdOrNull" }
         details: { type: object, additionalProperties: true, description: 已 redaction }
         created_at: { type: string, format: date-time }
+
+    # ---- approvals（architecture §22）----
+    ApprovalAction:
+      type: string
+      enum: [membership.promote_owner]
+
+    ApprovalStatus:
+      type: string
+      enum: [requested, approved, rejected, expired, executed]
+
+    ApprovalCreate:
+      type: object
+      required: [action, target_actor_id]
+      properties:
+        action: { $ref: "#/components/schemas/ApprovalAction" }
+        target_actor_id: { $ref: "#/components/schemas/Id" }
+
+    Approval:
+      type: object
+      required: [id, workspace_id, action, target_actor_id, status, requested_by, expires_at, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/Id" }
+        action: { $ref: "#/components/schemas/ApprovalAction" }
+        target_actor_id: { $ref: "#/components/schemas/Id" }
+        status: { $ref: "#/components/schemas/ApprovalStatus" }
+        requested_by: { $ref: "#/components/schemas/Id" }
+        decided_by: { $ref: "#/components/schemas/IdOrNull" }
+        decided_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    ApprovalPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Approval" } }
 
     # ---- 分页 envelope（protocol §5：cursor，不暴露 offset 语义）----
     PageMeta:

@@ -4,17 +4,35 @@
   "title": "Astral Error Envelope",
   "description": "所有非 2xx JSON 响应的统一形状（docs/protocol.md §4）。服务端 internal/httpx/errors.go 必须与此同步。",
   "type": "object",
-  "required": ["error"],
+  "required": [
+    "error"
+  ],
   "properties": {
     "error": {
       "type": "object",
-      "required": ["code", "message", "retryable", "request_id"],
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "request_id"
+      ],
       "properties": {
-        "code": { "$ref": "#/$defs/ErrorCode" },
-        "message": { "type": "string" },
-        "retryable": { "type": "boolean" },
-        "details": { "type": "object", "additionalProperties": true },
-        "request_id": { "type": "string" }
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "request_id": {
+          "type": "string"
+        }
       }
     }
   },
@@ -35,6 +53,7 @@
         "TASK_LEASE_EXPIRED",
         "TAG_PROPOSAL_EXPIRED",
         "TAG_ALREADY_EXISTS",
+        "APPROVAL_EXPIRED",
         "REVISION_CONFLICT",
         "DOCUMENT_CONFLICT",
         "RATE_LIMITED",
@@ -46,7 +65,7 @@
         "INTERNAL_ERROR",
         "NOT_IMPLEMENTED"
       ],
-      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_FOUND 用于未知路由与无专用码的次级资源 404。NOT_IMPLEMENTED 仅存在于脚手架阶段（HTTP 501 桩），各 Phase 落地后对应端点移除；CLI 不得依赖"
+      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_FOUND 用于未知路由与无专用码的次级资源 404。NOT_IMPLEMENTED 仅存在于脚手架阶段（HTTP 501 桩），各 Phase 落地后对应端点移除；CLI 不得依赖。APPROVAL_EXPIRED 为 approval 状态机裁决语义（architecture §22）"
     }
   }
 }
