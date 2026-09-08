@@ -1,7 +1,7 @@
 {
   "snapshot_version": 1,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "946e544",
+  "source_commit": "b18137f",
   "published_at": "2026-09-07",
   "protocol_version": 1,
   "min_cli_protocol_version": 1,
@@ -23,7 +23,7 @@
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应"
   },
   "breaking_changes": [],
-  "synced_at": "2026-09-07",
+  "synced_at": "2026-09-09",
   "revisions": [
     {
       "date": "2026-09-07",
@@ -34,6 +34,16 @@
         "capabilities.features 开放 task_lease",
         "task search 与 tags 端点从 501 桩转为实装（路径/形状未变）",
         "SSE 事件改为 outbox 统一路径，可见延迟 ≤500ms"
+      ]
+    },
+    {
+      "date": "2026-09-09",
+      "from_commit": "946e544",
+      "to_commit": "b18137f",
+      "changes": [
+        "新增控制事件 snapshot.required（SSE resume 超窗 24h 时下发，reason=cursor_expired）",
+        "SSE resume 正式可用：Last-Event-ID 头或 last_event_id query 参数",
+        "Idempotency-Key 语义实装：同 actor+endpoint+key 24h 内重放首次 2xx（X-Astral-Idempotent-Replay 标记）"
       ]
     }
   ]
