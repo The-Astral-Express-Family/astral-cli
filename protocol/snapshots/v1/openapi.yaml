@@ -704,6 +704,39 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessagePage"
 
+  /tasks/{task_id}/tags/{tag_id}:
+    parameters:
+      - { name: task_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      - { name: tag_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    put:
+      tags: [tasks]
+      summary: 挂载 tag（幂等：已挂返回当前任务，不 bump revision；D11）
+      operationId: attachTaskTag
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 已挂载（含 tags 的任务视图）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [tasks]
+      summary: 摘除 tag（幂等：未挂返回 204）
+      operationId: detachTaskTag
+      responses:
+        "204": { description: 已摘除或本就未挂载 }
+
   /tasks/{task_id}/messages:
     get:
       tags: [messages]
@@ -1317,6 +1350,11 @@ components:
         base_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         content: { type: string }
         content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$", description: 可选；服务端会重算并以重算值为准 }
+
+    NotFound:
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
     Conflict:
       type: object
