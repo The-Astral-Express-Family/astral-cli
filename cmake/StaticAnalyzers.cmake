@@ -1,0 +1,21 @@
+# Opt-in static analysis hooks. Both are OFF by default so plain builds stay fast.
+option(ASTRAL_ENABLE_CLANG_TIDY "Run clang-tidy during compilation" OFF)
+option(ASTRAL_ENABLE_CPPCHECK "Run cppcheck during compilation" OFF)
+
+if(ASTRAL_ENABLE_CLANG_TIDY)
+  find_program(ASTRAL_CLANG_TIDY_BIN NAMES clang-tidy)
+  if(ASTRAL_CLANG_TIDY_BIN)
+    set(CMAKE_CXX_CLANG_TIDY "${ASTRAL_CLANG_TIDY_BIN};--warnings-as-errors=*")
+  else()
+    message(WARNING "ASTRAL_ENABLE_CLANG_TIDY is ON but clang-tidy was not found")
+  endif()
+endif()
+
+if(ASTRAL_ENABLE_CPPCHECK)
+  find_program(ASTRAL_CPPCHECK_BIN NAMES cppcheck)
+  if(ASTRAL_CPPCHECK_BIN)
+    set(CMAKE_CXX_CPPCHECK "${ASTRAL_CPPCHECK_BIN};--error-exitcode=1;--inline-suppr")
+  else()
+    message(WARNING "ASTRAL_ENABLE_CPPCHECK is ON but cppcheck was not found")
+  endif()
+endif()

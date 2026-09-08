@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "astral-cli",
+  "version-string": "0.1.0",
+  "description": "Astral CLI - client for Astral servers",
+  "homepage": "https://github.com/The-Astral-Express-Family/astral-cli",
+  "dependencies": [
+    "cli11",
+    "curl",
+    "fmt",
+    "nlohmann-json",
+    "spdlog"
+  ],
+  "features": {
+    "tests": {
+      "description": "Dependencies for the unit test suite",
+      "dependencies": ["catch2"]
+    }
+  },
+  "builtin-baseline": "04a9d8e5212d01ee1dd9478eadd9caade4f8b0d4"
+}

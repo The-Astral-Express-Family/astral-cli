@@ -1,0 +1,50 @@
+name: Set up vcpkg
+description: Clone vcpkg at the manifest's builtin-baseline and export VCPKG_ROOT.
+runs:
+  using: composite
+  steps:
+    - name: Cache vcpkg binary archives
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/vcpkg/archives
+          ~/Library/Caches/vcpkg/archives
+          ~/AppData/Local/vcpkg/archives
+        key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Clone and bootstrap (posix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euxo pipefail
+        baseline=$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' vcpkg.json)
+        if [ ! -d "$HOME/vcpkg-clone/.git" ]; then
+          git init "$HOME/vcpkg-clone"
+          git -C "$HOME/vcpkg-clone" remote add origin https://github.com/microsoft/vcpkg.git
+        fi
+        if ! git -C "$HOME/vcpkg-clone" fetch --depth 1 origin "$baseline"; then
+          # AllowSHA1InWant is enabled on github.com, but keep a fallback.
+          git -C "$HOME/vcpkg-clone" fetch origin
+        fi
+        git -C "$HOME/vcpkg-clone" checkout --detach FETCH_HEAD
+        "$HOME/vcpkg-clone/bootstrap-vcpkg.sh" -disableMetrics
+        echo "VCPKG_ROOT=$HOME/vcpkg-clone" >> "$GITHUB_ENV"
+
+    - name: Clone and bootstrap (windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+        if (-not (Test-Path "$env:USERPROFILE\vcpkg-clone\.git")) {
+          git init "$env:USERPROFILE\vcpkg-clone" | Out-Null
+          git -C "$env:USERPROFILE\vcpkg-clone" remote add origin https://github.com/microsoft/vcpkg.git
+        }
+        git -C "$env:USERPROFILE\vcpkg-clone" fetch --depth 1 origin $baseline
+        if ($LASTEXITCODE -ne 0) { git -C "$env:USERPROFILE\vcpkg-clone" fetch origin }
+        git -C "$env:USERPROFILE\vcpkg-clone" checkout --detach FETCH_HEAD
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed" }
+        & "$env:USERPROFILE\vcpkg-clone\bootstrap-vcpkg.bat" -disableMetrics
+        Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$env:USERPROFILE\vcpkg-clone"

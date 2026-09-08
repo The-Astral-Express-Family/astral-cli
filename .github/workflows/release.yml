@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: linux-x64, archive: tar.gz }
+          - { os: ubuntu-24.04-arm, target: linux-arm64, archive: tar.gz }
+          - { os: macos-latest, target: macos-arm64, archive: tar.gz }
+          - { os: macos-13, target: macos-x64, archive: tar.gz } # last Intel image
+          - { os: windows-2022, target: windows-x64, archive: zip }
+    env:
+      ASTRAL_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up vcpkg
+        uses: ./.github/actions/setup-vcpkg
+
+      - name: Configure, build, test
+        shell: bash
+        run: |
+          cmake --preset ci
+          cmake --build --preset ci
+          ctest --preset ci
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          build/ci/astral version
+          build/ci/astral doctor --json
+          out=$(build/ci/astral version --json); echo "$out" | grep -q '"name":"astral"'
+
+      - name: Package (posix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="astral-${version}-${ASTRAL_TARGET}"
+          mkdir -p "dist/${name}"
+          cp build/ci/astral "dist/${name}/"
+          cp LICENSE README.md "dist/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $name = "astral-$version-$env:ASTRAL_TARGET"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item build/ci/astral.exe "dist/$name/"
+          Copy-Item LICENSE, README.md "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astral-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: astral-*
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum astral-*.tar.gz astral-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "astral ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag

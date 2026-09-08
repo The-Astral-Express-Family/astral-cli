@@ -1,0 +1,10 @@
+{
+  "server_id": "srv_01EXAMPLEEXAMPLEEXAMPLE",
+  "canonical_url": "https://astral.example.com",
+  "api_base": "/api/v1",
+  "protocol_version": 1,
+  "min_cli_protocol_version": 1,
+  "auth": {
+    "device_login": true
+  }
+}

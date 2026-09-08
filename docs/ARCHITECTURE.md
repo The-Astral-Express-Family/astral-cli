@@ -17,7 +17,7 @@
 - HTTP/SSE 客户端；
 - 每台服务器独立登录状态；
 - 本地 Workspace 绑定；
-- OS Credential Store 适配；
+- 本地凭证文件（`~/.astral-cli/`）读写与多服务器管理；
 - Human/JSON 输出；
 - Windows、macOS、Linux 构建、签名、Release 与包管理器分发；
 - 对 `astral-modulator` 公网协议做兼容测试。
@@ -43,7 +43,7 @@ astral-modulator
           | HTTPS REST/JSON + SSE
           v
 astral-cli
-  C++ CLI + local binding + credential adapters
+  C++ CLI + local binding + credentials file
   release / package managers / Agent JSON contract
 ```
 
@@ -61,7 +61,7 @@ CLI 只依赖公开协议版本。`astral-modulator` 发布协议变更时，应
 - nlohmann/json；
 - spdlog；
 - Catch2；
-- 平台安全存储通过 `platform/credential_store` 统一接口封装。
+- 凭证通过 `platform/credential_store` 统一接口封装，默认实现为 `~/.astral-cli/credentials.json` 文件（不依赖 OS keyring）。
 
 原则：
 
@@ -146,13 +146,13 @@ http://localhost:8080
 ```text
 astral login https://astral.example.com
   -> discover server
-  -> 查询本机 Credential Store
+  -> 查询本机凭证文件（~/.astral-cli/credentials.json）
   -> 若现有 session 可刷新，校验身份后直接成功
   -> 否则 POST /api/v1/auth/device/authorizations
   -> 输出 verification URL + user code，并尝试打开系统浏览器
   -> CLI 轮询授权结果
   -> 获得 access token + rotating refresh token
-  -> 写入 OS Credential Store
+  -> 写入本机凭证文件（0600，原子替换）
   -> GET /api/v1/auth/me 校验
 ```
 
@@ -172,39 +172,52 @@ Agent 不共享 Human refresh token。自动化环境优先使用服务端签发
 ASTRAL_TOKEN=...
 ```
 
-`ASTRAL_TOKEN` 只影响当前进程，不落 Workspace，也不自动写入 Credential Store。
+`ASTRAL_TOKEN` 只影响当前进程，不落 Workspace，也不写入凭证文件。
 
 后续可增加 `--token-stdin`，但禁止把 token 设计为普通命令行位置参数，以免进入 shell history 与进程列表。
 
 ## 7. 本地凭证存储
 
-凭证绝不进入 Git 仓库、`.astral/`、普通日志或 crash dump。
-
-抽象接口：
-
-```cpp
-class CredentialStore {
-public:
-    virtual std::optional<Credential> load(ServerId server) = 0;
-    virtual void save(ServerId server, const Credential& credential) = 0;
-    virtual void erase(ServerId server) = 0;
-};
-```
-
-平台实现：
-
-- Windows：Credential Manager / DPAPI；
-- macOS：Keychain；
-- Linux Desktop：Secret Service；
-- Headless/CI：环境变量或外部 secret manager，不提供默认明文 token 文件。
-
-建议 key：
+凭证保存为用户目录下的普通 JSON 文件：
 
 ```text
-Astral/<server_id>/<principal_id>
+~/.astral-cli/credentials.json        # Windows: %USERPROFILE%\.astral-cli\credentials.json
 ```
 
-本地普通配置可以记录最近访问服务器 URL、显示名等非敏感数据，但不能记录 access/refresh token。
+**设计取舍：不使用 OS keyring**（Windows Credential Manager / DPAPI、macOS Keychain、
+Linux Secret Service）。理由：
+
+- 可用性与开发效率优先于对抗本机恶意软件的威胁模型；
+- 三端路径与行为完全一致，`cat` 即可查看、`cp` 即可备份，调试直观；
+- 不引入平台依赖、DBus 会话、权限弹窗，headless/CI 开箱即用。
+
+文件格式（按 `server_id` 为主键，一个文件管理多台服务器登录态）：
+
+```json
+{
+  "version": 1,
+  "servers": {
+    "srv_01…": {
+      "principal_id": "user_01…",
+      "access_token": "…",
+      "refresh_token": "…"
+    }
+  }
+}
+```
+
+约束与行为：
+
+- 写入原子（temp + rename），POSIX 上文件权限 `0600`；Windows 依赖用户
+  profile 目录 ACL；
+- 凭证绝不进入 Git 仓库、`.astral/`、普通日志或 crash dump（本文件在
+  `~/.astral-cli/`，天然在 repo 之外）；
+- 文件损坏时读取报 `CREDENTIAL_STORE_ERROR` 并提示重新登录；`save`
+  容错重建，所以 `astral login` 本身就是修复手段；
+- `ASTRAL_TOKEN` 依然优先于该文件，且绝不落盘。
+
+接口保持抽象（`platform/credential_store`），默认实现为上述文件；若未来
+需要 keyring，可作为同一接口的可选后端叠加，不影响命令层。
 
 ## 8. Workspace 本地绑定
 
@@ -439,7 +452,7 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 
 401 处理顺序：
 
-1. 若使用 Human Credential Store 且 refresh session 可用，尝试一次 refresh；
+1. 若使用凭证文件中的 refresh token 且 refresh session 可用，尝试一次 refresh；
 2. 原请求重放一次；
 3. 仍失败则返回 auth error；
 4. 不进入无限 refresh/retry 循环。
@@ -483,23 +496,17 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 
 项目目录只保存 `.astral/config.json`。
 
-用户级非敏感设置与 cache 参考：
+用户级数据三端统一放在 `~/.astral-cli/`（Windows 用 `%USERPROFILE%\.astral-cli\`），
+不再按平台分散到 XDG / ~/Library / AppData：
 
 ```text
-Linux:
-  $XDG_CONFIG_HOME/astral/
-  $XDG_CACHE_HOME/astral/
-
-macOS:
-  ~/Library/Application Support/Astral/
-  ~/Library/Caches/Astral/
-
-Windows:
-  %APPDATA%\Astral\
-  %LOCALAPPDATA%\Astral\cache\
+~/.astral-cli/
+  credentials.json    # 登录凭证（见第 7 节，0600）
+  config.json         # 用户级非敏感设置（最近访问服务器等，未来）
+  cache/              # 用户级缓存
 ```
 
-真正凭证仍由系统 Credential Store 保存，不因这些目录可读而降级成明文 secret 文件。
+路径规则在 `platform/user_dirs` 集中实现；若用户设置 `ASTRAL_HOME`，以它为准。
 
 ## 16. 三端发行
 
@@ -552,7 +559,7 @@ v0.1 不做：
 
 1. **双仓库**：CLI 生命周期、依赖和发行链与服务端分离。
 2. **登录按服务器存储**：Workspace 只是授权域，不应制造一份凭证副本。
-3. **`.astral/` 只放一个非敏感 `config.json`**：repo 绑定可随 Git 流转，秘密留在本机系统。
+3. **`.astral/` 只放一个非敏感 `config.json`**：repo 绑定可随 Git 流转，凭证留在用户目录 `~/.astral-cli/credentials.json`。
 4. **`init` 可触发登录**：减少第一次使用步骤，但只在交互式 Human 场景发生。
 5. **ID 权威、name 辅助**：重命名 Workspace 不破坏本地绑定。
 6. **协议而非源码耦合**：两个 repo 独立演进，只通过版本化 HTTP 契约连接。

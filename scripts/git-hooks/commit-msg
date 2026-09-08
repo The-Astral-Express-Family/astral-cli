@@ -1,0 +1,8 @@
+#!/bin/sh
+# commit-msg hook: validates the commit message with scripts/commitlint.sh.
+# Runs on Linux/macOS/Windows (Git for Windows bundles sh). Installed via
+# `scripts/setup.sh` / `scripts/setup.ps1`, which set core.hooksPath.
+
+set -eu
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+exec sh "$root/scripts/commitlint.sh" "$1"

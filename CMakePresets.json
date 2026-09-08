@@ -1,0 +1,100 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Kitware/CMake/main/Help/manual/presets/schema.json",
+  "version": 8,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ASTRAL_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "vcpkg",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_FEATURES": "tests",
+        "VCPKG_MANIFEST_INSTALL": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "dev (debug, vcpkg)",
+      "inherits": ["base", "vcpkg"],
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "displayName": "release (vcpkg)",
+      "inherits": ["base", "vcpkg"],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ASTRAL_BUILD_TESTS": "OFF",
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "ci (release, tests, -Werror, vcpkg)",
+      "inherits": ["base", "vcpkg"],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ASTRAL_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "dev + sanitizers (gcc/clang)",
+      "inherits": ["dev"],
+      "cacheVariables": { "ASTRAL_ENABLE_SANITIZERS": "ON" }
+    },
+    {
+      "name": "system",
+      "displayName": "system deps (Linux only, no vcpkg)",
+      "inherits": ["base"],
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_MANIFEST_FEATURES": ""
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev", "jobs": 0 },
+    { "name": "release", "configurePreset": "release", "jobs": 0 },
+    { "name": "ci", "configurePreset": "ci", "jobs": 0 },
+    { "name": "asan", "configurePreset": "asan", "jobs": 0 },
+    { "name": "system", "configurePreset": "system", "jobs": 0 }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "system",
+      "configurePreset": "system",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}

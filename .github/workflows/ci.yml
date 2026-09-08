@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Commit message lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine commit range
+        id: range
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "range=origin/${{ github.base_ref }}..HEAD" >> "$GITHUB_OUTPUT"
+          elif [ -z "${{ github.event.before }}" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "range=HEAD~1..HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=${{ github.event.before }}..HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          fail=0
+          for commit in $(git rev-list --reverse "${{ steps.range.outputs.range }}"); do
+            msg=$(git log -1 --format=%B "$commit")
+            if ! sh scripts/commitlint.sh --message "$msg"; then
+              echo "invalid commit: $(git log -1 --oneline "$commit")" >&2
+              fail=1
+            fi
+          done
+          exit $fail
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format if missing
+        run: command -v clang-format >/dev/null || sudo apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          files=$(find src tests -name '*.cpp' -o -name '*.hpp')
+          clang-format --dry-run --Werror $files
+
+  build:
+    name: ${{ matrix.os }} (${{ matrix.arch }})
+    needs: [commitlint]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, arch: x64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+          - { os: macos-latest, arch: arm64 }
+          - { os: macos-13, arch: x64 } # last Intel image; switch to cross-compile when retired
+          - { os: windows-2022, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up vcpkg
+        uses: ./.github/actions/setup-vcpkg
+
+      - name: Configure
+        run: cmake --preset ci
+
+      - name: Build
+        run: cmake --build --preset ci
+
+      - name: Unit tests
+        run: ctest --preset ci
+
+      - name: Contract tests
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake --preset ci -DASTRAL_ENABLE_CONTRACT_TESTS=ON > /dev/null
+          cmake --build --preset ci > /dev/null
+          ctest --preset ci -R contract
+
+      - name: Smoke test (built binary)
+        shell: bash
+        run: |
+          bin="build/ci/astral"
+          "$bin" version
+          "$bin" doctor --json
+          set +e
+          "$bin" --json todo list; code=$?
+          set -e
+          [ "$code" -eq 1 ]
+          set +e
+          "$bin" bogus; code=$?
+          set -e
+          [ "$code" -eq 2 ]
