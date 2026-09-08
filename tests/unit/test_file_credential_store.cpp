@@ -115,6 +115,9 @@ TEST_CASE("unknown file version is treated as malformed") {
     REQUIRE(store.load("srv_01").has_value());
 }
 
+#ifndef _WIN32
+// Windows 的 NTFS 没有 POSIX 位掩码语义（MSVC status 对普通可写文件报 0777），
+// 0600 断言只在 POSIX 上有意义；Windows 上由用户 profile 目录 ACL 保护。
 TEST_CASE("written file is owner-only on POSIX") {
     const fs::path file = makeTempFile();
     FileCredentialStore store(file);
@@ -125,6 +128,7 @@ TEST_CASE("written file is owner-only on POSIX") {
     const fs::perms allowed = fs::perms::owner_read | fs::perms::owner_write;
     REQUIRE((perms & fs::perms::mask) == allowed);
 }
+#endif
 
 TEST_CASE("tokens are stored as plain JSON fields") {
     const fs::path file = makeTempFile();

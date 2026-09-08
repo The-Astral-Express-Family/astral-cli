@@ -1,11 +1,10 @@
 #include "platform/credential_store.hpp"
 
 #include <fstream>
-#include <random>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 
+#include "platform/atomic_file.hpp"
 #include "platform/user_dirs.hpp"
 
 namespace astral::platform {
@@ -16,13 +15,6 @@ constexpr int kCredentialsVersion = 1;
 
 nlohmann::json freshRoot() {
     return nlohmann::json{{"version", kCredentialsVersion}, {"servers", nlohmann::json::object()}};
-}
-
-std::string randomSuffix() {
-    static std::random_device device;
-    std::stringstream stream;
-    stream << std::hex << device();
-    return stream.str();
 }
 
 } // namespace
@@ -103,35 +95,10 @@ void FileCredentialStore::writeRoot(const nlohmann::json& root) const {
         }
     }
 
-    const fs::path temp = dir / ("." + file_.filename().string() + ".tmp." + randomSuffix());
-    {
-        std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-        if (!output) {
-            fs::remove(temp);
-            throw core::AstralError(core::Errc::CredentialStoreError,
-                                    "cannot write " + temp.string());
-        }
-        output << root.dump(2) << '\n';
-        output.flush();
-        if (!output) {
-            fs::remove(temp);
-            throw core::AstralError(core::Errc::CredentialStoreError,
-                                    "failed writing " + temp.string());
-        }
-    }
-
     // Owner-only：POSIX 上设 0600；Windows 文件留在用户 profile 内，由
-    // 目录 ACL 保护，这里 set 位是 best-effort。
-    std::error_code ec;
-    fs::permissions(temp, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace,
-                    ec);
-
-    fs::rename(temp, file_, ec);
-    if (ec) {
-        fs::remove(temp, ec);
-        throw core::AstralError(core::Errc::CredentialStoreError,
-                                "cannot finalize " + file_.string() + ": " + ec.message());
-    }
+    // 目录 ACL 保护，set 位在 helper 内是 best-effort。
+    platform::writeFileAtomic(file_, root.dump(2) + '\n', core::Errc::CredentialStoreError,
+                              /*ownerOnly=*/true);
 }
 
 std::optional<Credential> FileCredentialStore::load(const ServerId& server) const {

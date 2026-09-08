@@ -941,6 +941,7 @@ components:
         - RATE_LIMITED
         - CLIENT_VERSION_UNSUPPORTED
         - VALIDATION_FAILED
+        - NOT_FOUND               # 未知路由 / 无专用码的次级资源不存在（HTTP 404）
         - AUTHORIZATION_PENDING   # device flow 轮询（A1/RFC 8628），HTTP 400 + retryable
         - SLOW_DOWN               # device flow 轮询过快（A1），HTTP 400 + retryable
         - INTERNAL_ERROR

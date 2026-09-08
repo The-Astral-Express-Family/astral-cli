@@ -40,12 +40,13 @@
         "RATE_LIMITED",
         "CLIENT_VERSION_UNSUPPORTED",
         "VALIDATION_FAILED",
+        "NOT_FOUND",
         "AUTHORIZATION_PENDING",
         "SLOW_DOWN",
         "INTERNAL_ERROR",
         "NOT_IMPLEMENTED"
       ],
-      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_IMPLEMENTED 仅存在于脚手架阶段（HTTP 501 桩），各 Phase 落地后对应端点移除；CLI 不得依赖"
+      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_FOUND 用于未知路由与无专用码的次级资源 404。NOT_IMPLEMENTED 仅存在于脚手架阶段（HTTP 501 桩），各 Phase 落地后对应端点移除；CLI 不得依赖"
     }
   }
 }

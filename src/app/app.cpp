@@ -69,6 +69,8 @@ int dispatchCommand(commands::Command& command, const GlobalOptions& options, st
 int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
     CLI::App app{"astral - client for Astral servers", "astral"};
     app.set_version_flag("-v,--version", std::string(core::kProjectVersion));
+    // 注：version 串参数实际不会输出——本程序自行捕获 CLI::CallForVersion
+    // 打印加长格式（版本 + 平台 + 协议版本），CLI11 自带的 run() 未被使用。
     app.require_subcommand(1);
     // Global flags stay usable after the subcommand (e.g. `astral todo list
     // --json`), matching what users expect from modern CLIs.

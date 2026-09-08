@@ -1,7 +1,7 @@
 {
   "snapshot_version": 1,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "b18137f",
+  "source_commit": "dbea374",
   "published_at": "2026-09-07",
   "protocol_version": 1,
   "min_cli_protocol_version": 1,
@@ -9,17 +9,18 @@
     "openapi.yaml": "REST API 事实来源（全部 /api/v1 路径、字段、错误码、分页、并发语义）",
     "error.schema.json": "统一错误 envelope 契约",
     "event.schema.json": "SSE/WebSocket 事件 envelope 契约",
-    "well-known.json": "发现文档形状（原有）"
+    "well-known.json": "发现文档形状（原有）",
+    "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册；task search、tags、documents、memory、audit 查询当前返回 501 NOT_IMPLEMENTED 桩（CLI 不得依赖该错误码做正式逻辑）。auth/workspace/tasks(基础)/claim/lease/presence/messages/events 为真实实现。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册；auth/workspace/tasks(基础)/claim/lease/search/tags/presence/messages/events(SSE resume)/Idempotency-Key 为真实实现。documents/memory/audit 查询仍为 501 NOT_IMPLEMENTED 桩（CLI 不得依赖该错误码做正式逻辑）。",
   "key_semantics": {
     "device_flow": "POST /auth/device/authorizations {client_type} -> 轮询 POST /auth/device/authorizations/{device_code}/token；pending=400 AUTHORIZATION_PENDING，过快=400 SLOW_DOWN，均 retryable",
     "token_refresh": "POST /auth/token/refresh {refresh_token}，rotating；重放 -> 401 TOKEN_REVOKED 且整族撤销（CLI 必须重新 login）",
     "astral_token": "agent credential 明文 astral_<base64url>，作 Bearer 使用",
     "workspace_resolve": "GET /workspaces?name=<exact-or-slug>；空 items = 不存在或不可见",
     "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
-    "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；v1 无重放（Last-Event-ID 预留）",
-    "idempotency": "Idempotency-Key 头已在契约中定义，服务端 v0.1 尚未强制；CLI 可先不发送",
+    "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）",
+    "idempotency": "Idempotency-Key 已实装：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx （响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应"
   },
   "breaking_changes": [],
@@ -44,6 +45,19 @@
         "新增控制事件 snapshot.required（SSE resume 超窗 24h 时下发，reason=cursor_expired）",
         "SSE resume 正式可用：Last-Event-ID 头或 last_event_id query 参数",
         "Idempotency-Key 语义实装：同 actor+endpoint+key 24h 内重放首次 2xx（X-Astral-Idempotent-Replay 标记）"
+      ]
+    },
+    {
+      "date": "2026-09-09",
+      "from_commit": "b18137f",
+      "to_commit": "dbea374",
+      "changes": [
+        "新增错误码 NOT_FOUND（404，非 retryable）：未知路由与次级资源不存在；原先此类场景返回 VALIDATION_FAILED 或 INTERNAL_ERROR",
+        "task 列表排序定为 id DESC（UUIDv7 创建序），cursor 即末行 id",
+        "presence 语义定为 (actor, workspace) 一行（migration 00010）",
+        "私信发送校验收件人 workspace 可达性（成员或绑定 credential），不可达 404",
+        "refresh 并发轮换改条件更新：输家 401，不触发整族撤销",
+        "error.schema.json 去除过时 todo_phase_4 注记"
       ]
     }
   ]

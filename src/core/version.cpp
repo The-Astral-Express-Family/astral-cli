@@ -2,10 +2,6 @@
 
 namespace astral::core {
 
-const char* versionString() {
-    return kProjectVersion;
-}
-
 const char* buildPlatform() {
 #if defined(_WIN64)
     return "windows/x86_64";

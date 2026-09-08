@@ -9,7 +9,6 @@ inline constexpr const char* kGitDescribe = "@ASTRAL_GIT_DESCRIBE@";
 // Protocol version this CLI speaks; see ARCHITECTURE.md section 5.
 inline constexpr int kProtocolVersion = 1;
 
-const char* versionString();
 const char* buildPlatform();
 
 }  // namespace astral::core

@@ -17,6 +17,7 @@ add_library(astral_core STATIC
   output/json_output.cpp
   output/style.cpp
   output/tty.cpp
+  platform/atomic_file.cpp
   platform/browser.cpp
   platform/credential_store.cpp
   platform/user_dirs.cpp
