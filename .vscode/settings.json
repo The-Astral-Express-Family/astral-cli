@@ -1,0 +1,38 @@
+{
+  // clangd 是当前编辑器的 C/C++ 语言服务。本工作区同时安装了 cpptools 与
+  // clangd 扩展，必须显式禁用 cpptools 的 IntelliSense 引擎，否则两套诊断
+  // 会打架（一套红一套不红，体验非常混乱）。
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  // clangd 可执行文件路径。系统 PATH 里已有 /usr/bin/clangd，不填也能找到；
+  // 这里写明是为了在 PATH 环境不同的集成终端里也稳定。
+  "clangd.path": "/usr/bin/clangd",
+
+  // clangd 启动参数：
+  //   --background-index  后台索引整个项目，跨文件跳转/引用查找可用
+  //   --clang-tidy        打开内置 clang-tidy 静态检查（可与 CMake 的
+  //                       ASTRAL_ENABLE_CLANG_TIDY 互补，编辑期即时反馈）
+  //   --all-scopes-completions  在非当前作用域也能补全到符号
+  //   --header-insertion=never  不自动插入头文件（避免误插入后手动清理）
+  "clangd.arguments": [
+    "--background-index",
+    "--clang-tidy",
+    "--all-scopes-completions",
+    "--header-insertion=never"
+  ],
+
+  // C/C++ 扩展自身不再做 IntelliSense，但保留它的文件关联和调试符号支持。
+  "C_Cpp.default.configurationProvider": "none",
+  "files.associations": {
+    "*.hpp": "cpp",
+    "*.ipp": "cpp"
+  },
+
+  // 构建目录较多（dev/ci/release/asan），搜索时跳过 build，避免噪音。
+  "search.exclude": {
+    "build/**": true
+  },
+  "files.watcherExclude": {
+    "build/**": true
+  }
+}

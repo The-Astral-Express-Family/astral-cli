@@ -1,0 +1,32 @@
+# clangd 配置 (https://clangd.llvm.org/config)
+#
+# 背景：compile_commands.json 生成在 build/dev/ 下，超出了 clangd 的自动搜索
+# 范围（源码目录 + 父目录 + build/ 一级），clangd 找不到编译命令时退化成
+# "generic fallback"，没有任何 -I 路径 -> 连项目自身头文件都找不到 -> 满屏红。
+#
+# 注意：.clangd 是 YAML，顶层键（CompileFlags / If / Index ...）不能重复；
+# 需要按文件类型区分时要写成 --- 分隔的多个 YAML 文档。
+
+CompileFlags:
+  # 让 clangd 到 build/dev/ 里找 compile_commands.json（相对本文件所在目录）。
+  CompilationDatabase: build/dev
+
+  # 对编译数据库覆盖不到的文件（新建源文件、无对应 .cpp 的头文件）追加
+  # 包含路径作为兜底。对已有编译命令的文件，这些参数会附加在命令末尾。
+  Add:
+    [
+      -std=c++20,
+      -Isrc,
+      -Ibuild/dev/src/generated,
+      -isystem build/dev/vcpkg_installed/x64-linux/include,
+    ]
+
+  # 数据库里的 -Wall -Wextra -Wpedantic ... 是构建期警告，编辑期开着会很吵。
+  # Remove 按正则匹配参数，[-W*] 把它们全部去掉，诊断以 clangd/clang-tidy 为准。
+  Remove: [-W*]
+
+Diagnostics:
+  # UnusedIncludes / MissingIncludes 由 IncludeCleaner 提供，会在编辑器里报
+  # "多余 include" / "找不到 include" 类提示，容易和真正的错误混在一起。
+  UnusedIncludes: None
+  MissingIncludes: None
