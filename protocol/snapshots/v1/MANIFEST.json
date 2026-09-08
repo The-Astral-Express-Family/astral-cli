@@ -1,0 +1,26 @@
+{
+  "snapshot_version": 1,
+  "source_repository": "The-Astral-Express-Family/astral-modulator",
+  "source_commit": "75269c4e4fc948ba07bde4f9125e0d7ff94ece79",
+  "published_at": "2026-09-07",
+  "protocol_version": 1,
+  "min_cli_protocol_version": 1,
+  "files": {
+    "openapi.yaml": "REST API 事实来源（全部 /api/v1 路径、字段、错误码、分页、并发语义）",
+    "error.schema.json": "统一错误 envelope 契约",
+    "event.schema.json": "SSE/WebSocket 事件 envelope 契约",
+    "well-known.json": "发现文档形状（原有）"
+  },
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册；task search、tags、documents、memory、audit 查询当前返回 501 NOT_IMPLEMENTED 桩（CLI 不得依赖该错误码做正式逻辑）。auth/workspace/tasks(基础)/claim/lease/presence/messages/events 为真实实现。",
+  "key_semantics": {
+    "device_flow": "POST /auth/device/authorizations {client_type} -> 轮询 POST /auth/device/authorizations/{device_code}/token；pending=400 AUTHORIZATION_PENDING，过快=400 SLOW_DOWN，均 retryable",
+    "token_refresh": "POST /auth/token/refresh {refresh_token}，rotating；重放 -> 401 TOKEN_REVOKED 且整族撤销（CLI 必须重新 login）",
+    "astral_token": "agent credential 明文 astral_<base64url>，作 Bearer 使用",
+    "workspace_resolve": "GET /workspaces?name=<exact-or-slug>；空 items = 不存在或不可见",
+    "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
+    "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；v1 无重放（Last-Event-ID 预留）",
+    "idempotency": "Idempotency-Key 头已在契约中定义，服务端 v0.1 尚未强制；CLI 可先不发送",
+    "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 1 于全部 /api/v1 响应"
+  },
+  "breaking_changes": []
+}

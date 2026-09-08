@@ -1,0 +1,1386 @@
+# Astral Modulator 公网协议 —— 唯一事实来源（Single Source of Truth）
+#
+# 本文件归 astral-modulator 仓库所有（architecture §26）。astral-cli 通过协议快照
+# 做契约测试，不共享源码。任何路径/字段/错误码变更都必须：
+#   1. 修改本文件（必要时连同 api/schemas/*.json）；
+#   2. 更新 server 端实现与路由；
+#   3. 在 TODO.md「契约变更登记」追加条目；
+#   4. 评估兼容窗口（breaking change 需服务端先兼容后切换）。
+#
+# 版本规则：info.version = <protocol>.<minor>.<patch>，其中 major 位与
+# /.well-known/astral 的 protocol_version 一致。
+openapi: 3.1.0
+info:
+  title: Astral Modulator Public API
+  version: 1.0.0-scaffold
+  license:
+    name: MIT
+    identifier: MIT
+  description: |
+    人类与多 LLM Agent 的协作控制面。CLI（astral-cli 仓库）与 Web GUI 共用本协议。
+
+    已裁决的文档分歧（详见 TODO.md「文档分歧裁决」）：
+    - Device flow 采用 architecture.md 路径 `/auth/device/authorizations*`
+      （protocol.md §8 的 `/auth/device*` 废弃）。
+    - 当前身份端点为 `/auth/me`（protocol.md §8 的 `/auth/session` 废弃）。
+
+    通用约定：
+    - 所有时间戳为 RFC3339 UTC。
+    - ID 为 `prefix_uuidv7` 形式的不透明字符串，客户端不得解析内部结构。
+    - 错误响应统一使用 ErrorEnvelope；CLI 依赖稳定 error.code。
+    - 乐观并发统一使用 body 内 expected_revision（protocol §6 方案 A）。
+servers:
+  - url: /api/v1
+    description: API v1 基线（实际 host 由 /.well-known/astral 发现）
+tags:
+  - name: discovery
+  - name: auth
+  - name: workspaces
+  - name: tasks
+  - name: tags
+  - name: presence
+  - name: messages
+  - name: documents
+  - name: events
+  - name: agents
+
+security:
+  - bearerAuth: []
+
+paths:
+  /.well-known/astral:
+    get:
+      tags: [discovery]
+      summary: 服务器发现（免认证，登录前可用）
+      security: []
+      operationId: getWellKnown
+      responses:
+        "200":
+          description: 服务器身份与兼容性信息
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WellKnown" }
+
+  /meta/capabilities:
+    get:
+      tags: [discovery]
+      summary: 服务器能力（免认证）
+      security: []
+      operationId: getCapabilities
+      responses:
+        "200":
+          description: 能力清单
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capabilities" }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Bootstrap 注册首个 Human（仅当服务器无 human 时开放；D6）
+      security: []
+      operationId: registerBootstrap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8, maxLength: 72, description: 需含字母与数字 }
+                display_name: { type: string }
+      responses:
+        "201":
+          description: 已创建（返回 actor）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "403": { $ref: "#/components/responses/Error" }   # 已有 human，注册关闭
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Human 本地登录（浏览器侧，D6）。成功后设置 HttpOnly 会话 Cookie
+      security: []
+      operationId: loginLocal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: "已登录（Set-Cookie: astral_session）"
+          headers:
+            Set-Cookie: { schema: { type: string }, description: "HttpOnly, SameSite=Lax, Secure(HTTPS)" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /auth/device/authorizations:
+    post:
+      tags: [auth]
+      summary: Device Flow 第一步：申请 device/user code
+      security: []
+      operationId: createDeviceAuthorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_type]
+              properties:
+                client_type: { type: string, enum: [cli, web] }
+      responses:
+        "201":
+          description: 已创建授权请求
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceAuthorization" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    get:
+      tags: [auth]
+      summary: 审批页按 user_code 查询待授权请求（A3，需 human session）
+      operationId: findDeviceAuthorization
+      parameters:
+        - { name: user_code, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 授权请求视图（不含 device_code）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceAuthorizationView" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /auth/device/authorizations/{device_code}/token:
+    post:
+      tags: [auth]
+      summary: Device Flow 第二步：CLI 轮询兑换 token
+      security: []
+      operationId: exchangeDeviceToken
+      parameters:
+        - { name: device_code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 兑换成功（单次有效）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400":
+          description: |
+            pending（AUTHORIZATION_PENDING）或轮询过快（SLOW_DOWN，客户端应退避）。
+            两者均 retryable=true（A1，RFC 8628 语义）。
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "401": { $ref: "#/components/responses/Error" }   # denied / expired / reused
+
+  /auth/device/authorizations/{id}/approve:
+    post:
+      tags: [auth]
+      summary: 批准 device 授权（浏览器侧 human session，A3）
+      operationId: approveDeviceAuthorization
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已批准，CLI 下次轮询将获得 token }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /auth/device/authorizations/{id}/deny:
+    post:
+      tags: [auth]
+      summary: 拒绝 device 授权（浏览器侧 human session，A3）
+      operationId: denyDeviceAuthorization
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已拒绝 }
+        "409": { $ref: "#/components/responses/Error" }
+
+
+  /auth/token/refresh:
+    post:
+      tags: [auth]
+      summary: 轮换 refresh token（重放检测触发整族撤销）
+      security: []
+      operationId: refreshToken
+      responses:
+        "200":
+          description: 新 token 对
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: 撤销当前 session（Web 同时清 Cookie）
+      operationId: logout
+      responses:
+        "204": { description: 已登出 }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: 当前 actor 与 session 元数据（CLI 登录自检）
+      operationId: getMe
+      responses:
+        "200":
+          description: 当前身份
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /workspaces:
+    post:
+      tags: [workspaces]
+      summary: 创建 workspace（支持 Idempotency-Key）
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceCreate" }
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "409": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [workspaces]
+      summary: 列出可见 workspace；支持 ?name= 精确 name/slug 解析（astral init 依赖）
+      operationId: listWorkspaces
+      parameters:
+        - { name: name, in: query, schema: { type: string }, description: exact name 或 slug }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: workspace 分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspacePage"
+
+  /workspaces/{workspace_id}:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    get:
+      tags: [workspaces]
+      summary: workspace 详情（init 最终绑定校验用）
+      operationId: getWorkspace
+      responses:
+        "200":
+          description: 详情
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [workspaces]
+      summary: 改名（workspace_id 不变，改名不破坏 CLI 绑定）
+      operationId: updateWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceUpdate" }
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+
+  /workspaces/{workspace_id}/members:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    get:
+      tags: [workspaces]
+      summary: 成员列表
+      operationId: listMembers
+      responses:
+        "200":
+          description: 成员分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberPage"
+    post:
+      tags: [workspaces]
+      summary: 添加成员（promote_owner 走 approval）
+      operationId: addMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemberAdd" }
+      responses:
+        "201":
+          description: 已添加
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Member" }
+
+  /workspaces/{workspace_id}/members/{actor_id}:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+      - { name: actor_id, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [workspaces]
+      summary: 调整成员 role
+      operationId: updateMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/Role" }
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Member" }
+    delete:
+      tags: [workspaces]
+      summary: 移除成员
+      operationId: removeMember
+      responses:
+        "204": { description: 已移除 }
+
+  /workspaces/{workspace_id}/tasks:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [tasks]
+      summary: 创建任务（支持 Idempotency-Key）
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskCreate" }
+      responses:
+        "201":
+          description: 已创建（revision=1）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+    get:
+      tags: [tasks]
+      summary: 任务列表（结构化过滤 + cursor 分页）
+      operationId: listTasks
+      parameters:
+        - { name: parent_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/TaskStatus" } }
+        - { name: assignee, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 任务分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskPage"
+
+  /workspaces/{workspace_id}/tasks/search:
+    get:
+      tags: [tasks]
+      summary: |
+        搜索。语义固定：权限过滤 -> 结构化过滤 -> regex 过滤 -> fuzzy 排序 -> 分页。
+        regex 与 fuzzy 可同时提供；只传 regex 不做模糊排序（architecture §13）。
+      operationId: searchTasks
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - { name: regex, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: fuzzy, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: parent_id, in: query, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/TaskStatus" } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 搜索结果（含 fuzzy 分数时见 items[].score）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSearchPage"
+        "400": { $ref: "#/components/responses/Error" }   # 非法 regex / 超长输入
+
+  /tasks/{task_id}:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+    get:
+      tags: [tasks]
+      summary: 任务详情
+      operationId: getTask
+      responses:
+        "200":
+          description: 详情
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [tasks]
+      summary: 更新任务（乐观并发）
+      operationId: updateTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskUpdate" }
+      responses:
+        "200":
+          description: 已更新（revision+1）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "409": { $ref: "#/components/responses/Error" }   # REVISION_CONFLICT，details 带当前 revision
+
+  /tasks/{task_id}/claim:
+    post:
+      tags: [tasks]
+      summary: 原子认领（Phase 1 spike 验收核心）
+      operationId: claimTask
+      parameters:
+        - { $ref: "#/components/parameters/TaskId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision]
+              properties:
+                expected_revision: { type: integer, format: int64, minimum: 1 }
+                lease_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
+      responses:
+        "200":
+          description: 认领成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaimResult" }
+        "409": { $ref: "#/components/responses/Error" }   # TASK_ALREADY_CLAIMED / REVISION_CONFLICT
+
+  /tasks/{task_id}/lease/renew:
+    post:
+      tags: [tasks]
+      summary: 续租（仅 holder）
+      operationId: renewLease
+      parameters:
+        - { $ref: "#/components/parameters/TaskId" }
+      responses:
+        "200":
+          description: 已续租
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lease" }
+        "409": { $ref: "#/components/responses/Error" }   # TASK_LEASE_EXPIRED 需重新 claim
+
+  /tasks/{task_id}/lease:
+    delete:
+      tags: [tasks]
+      summary: 释放（holder；human force release 走 override/approval）
+      operationId: releaseLease
+      parameters:
+        - { $ref: "#/components/parameters/TaskId" }
+      responses:
+        "204": { description: 已释放 }
+
+  /workspaces/{workspace_id}/tags:
+    get:
+      tags: [tags]
+      summary: workspace tag 列表（proposal 第一步响应的 existing_tags 来源）
+      operationId: listTags
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      responses:
+        "200":
+          description: tag 分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagPage"
+
+  /workspaces/{workspace_id}/tag-proposals:
+    post:
+      tags: [tags]
+      summary: Tag 两步确认第一步（不创建正式 tag；支持 Idempotency-Key）
+      operationId: proposeTag
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TagProposalRequest" }
+      responses:
+        "201":
+          description: proposal 已创建（含全量 existing_tags 供比对）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TagProposal" }
+
+  /tag-proposals/{proposal_id}/confirm:
+    post:
+      tags: [tags]
+      summary: Tag 两步确认第二步（CLI 固定拼写 --confirm）
+      operationId: confirmTagProposal
+      parameters:
+        - { name: proposal_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_code, name]
+              properties:
+                confirm_code: { type: string, description: 服务端下发的校验码（TTL 内单次有效） }
+                name: { type: string, description: 必须与 proposal 的 canonical 输入一致 }
+      responses:
+        "200":
+          description: 确认成功（create/rename/delete 已生效）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tag" }
+        "409": { $ref: "#/components/responses/Error" }   # TAG_PROPOSAL_EXPIRED / TAG_ALREADY_EXISTS
+
+  /workspaces/{workspace_id}/presence/me:
+    put:
+      tags: [presence]
+      summary: Presence 心跳（展示状态，不代表任务所有权）
+      operationId: putPresence
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PresenceInput" }
+      responses:
+        "200":
+          description: 已记录
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Presence" }
+
+  /workspaces/{workspace_id}/presence:
+    get:
+      tags: [presence]
+      summary: workspace 在线状态总览（GUI 首页数据源）
+      operationId: listPresence
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      responses:
+        "200":
+          description: presence 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Presence" }
+
+  /workspaces/{workspace_id}/messages:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [messages]
+      summary: 发送消息（支持 Idempotency-Key，重试不得双发）
+      operationId: sendMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MessageSend" }
+      responses:
+        "201":
+          description: 已发送
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+    get:
+      tags: [messages]
+      summary: 消息列表（按 target/thread 过滤）
+      operationId: listMessages
+      parameters:
+        - { name: thread_id, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 消息分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+
+  /tasks/{task_id}/messages:
+    get:
+      tags: [messages]
+      summary: task thread 消息
+      operationId: listTaskMessages
+      parameters:
+        - { $ref: "#/components/parameters/TaskId" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 消息分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+
+  /workspaces/{workspace_id}/documents/manifest:
+    get:
+      tags: [documents]
+      summary: 受管文档清单（同步基准）
+      operationId: getDocumentManifest
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      responses:
+        "200":
+          description: manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ManifestItem" }
+
+  /workspaces/{workspace_id}/documents/{path}:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+      - name: path
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[^/].*$" }
+        description: |
+          严格 URL 编码的仓库相对路径（'/' 分隔）。服务端 canonicalize，
+          拒绝 '..'/绝对路径/secrets 默认路径。
+        x-astral-wildcard: true
+    get:
+      tags: [documents]
+      summary: 读取文档
+      operationId: getDocument
+      responses:
+        "200":
+          description: 文档内容与 revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [documents]
+      summary: 三方同步 push（支持 Idempotency-Key；禁止 last-write-wins）
+      operationId: pushDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentPush" }
+      responses:
+        "200":
+          description: 已落地（可能为合并结果）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "409": { $ref: "#/components/responses/Error" }   # DOCUMENT_CONFLICT，产生 conflict artifact
+
+  /workspaces/{workspace_id}/conflicts:
+    get:
+      tags: [documents]
+      summary: 未解决冲突列表
+      operationId: listConflicts
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+      responses:
+        "200":
+          description: 冲突列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Conflict" }
+
+  /workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:
+    post:
+      tags: [documents]
+      summary: 解决冲突（resolution=ours|theirs|merged|manual）
+      operationId: resolveConflict
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - { name: conflict_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConflictResolve" }
+      responses:
+        "200":
+          description: 已解决并产生新 revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+
+  /workspaces/{workspace_id}/events:
+    get:
+      tags: [events]
+      summary: SSE 事件流（envelope 见 api/schemas/event.json）
+      operationId: streamEvents
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - name: Last-Event-ID
+          in: header
+          schema: { type: string }
+          description: 断线续传游标；超出保留窗口时服务端下发 snapshot.required
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /workspaces/{workspace_id}/agents:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    get:
+      tags: [agents]
+      summary: workspace 内 agent/service 列表
+      operationId: listAgents
+      responses:
+        "200":
+          description: agent 分页列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentPage"
+    post:
+      tags: [agents]
+      summary: 创建 agent actor
+      operationId: createAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentCreate" }
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+
+  /agents/{agent_id}/credentials:
+    post:
+      tags: [agents]
+      summary: 签发 credential（明文 secret 仅本次响应返回一次）
+      operationId: createCredential
+      parameters:
+        - { name: agent_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CredentialCreate" }
+      responses:
+        "201":
+          description: 已签发（含一次性明文 secret）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialIssued" }
+
+  /agents/{agent_id}/credentials/{credential_id}:
+    delete:
+      tags: [agents]
+      summary: 撤销 credential（联动断开其 SSE 连接）
+      operationId: revokeCredential
+      parameters:
+        - { name: agent_id, in: path, required: true, schema: { type: string } }
+        - { name: credential_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已撤销 }
+
+  /workspaces/{workspace_id}/audit:
+    get:
+      tags: [workspaces]
+      summary: 审计时间线（audit:read；GUI 数据源）
+      operationId: listAudit
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - { name: actor_id, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 审计分页列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Human access token 或 Agent/Service credential（不共用）
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: astral_session
+      description: Web GUI HttpOnly+Secure+SameSite session（与 CLI Bearer 同 actor 不同 session）
+
+  parameters:
+    WorkspaceId:
+      name: workspace_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, description: 不透明游标，取自 next_cursor }
+
+  responses:
+    Error:
+      description: 统一错误 envelope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RateLimited:
+      description: 限流（Retry-After 头 + retryable=true）
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    Id:
+      type: string
+      pattern: "^[a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/prs/msg/evt/cred/ses/dev/req/aud/apv。
+      examples: ["ws_0192ab34-56cd-7ef8-9a01-234567890abc"]
+
+    IdOrNull:
+      oneOf:
+        - $ref: "#/components/schemas/Id"
+        - type: "null"
+
+    DateTimeOrNull:
+      type: [string, "null"]
+      format: date-time
+
+    LeaseOrNull:
+      oneOf:
+        - $ref: "#/components/schemas/Lease"
+        - type: "null"
+
+    ErrorCode:
+      type: string
+      enum:
+        - AUTH_REQUIRED
+        - TOKEN_EXPIRED
+        - TOKEN_REVOKED
+        - INSUFFICIENT_SCOPE
+        - SERVER_NOT_FOUND
+        - WORKSPACE_NOT_FOUND
+        - WORKSPACE_ALREADY_BOUND
+        - WORKSPACE_NAME_TAKEN
+        - TASK_NOT_FOUND
+        - TASK_ALREADY_CLAIMED
+        - TASK_LEASE_EXPIRED
+        - TAG_PROPOSAL_EXPIRED
+        - TAG_ALREADY_EXISTS
+        - REVISION_CONFLICT
+        - DOCUMENT_CONFLICT
+        - RATE_LIMITED
+        - CLIENT_VERSION_UNSUPPORTED
+        - VALIDATION_FAILED
+        - AUTHORIZATION_PENDING   # device flow 轮询（A1/RFC 8628），HTTP 400 + retryable
+        - SLOW_DOWN               # device flow 轮询过快（A1），HTTP 400 + retryable
+        - INTERNAL_ERROR
+        - NOT_IMPLEMENTED   # 仅脚手架阶段（HTTP 501），正式端点不得返回
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable, request_id]
+          properties:
+            code: { $ref: "#/components/schemas/ErrorCode" }
+            message: { type: string }
+            retryable: { type: boolean }
+            details: { type: object, additionalProperties: true }
+            request_id: { type: string }
+
+    WellKnown:
+      type: object
+      required: [server_id, canonical_url, api_base, protocol_version, min_cli_protocol_version, auth]
+      properties:
+        server_id: { $ref: "#/components/schemas/Id" }
+        canonical_url: { type: string, format: uri }
+        api_base: { type: string, default: /api/v1 }
+        protocol_version: { type: integer, minimum: 1 }
+        min_cli_protocol_version: { type: integer, minimum: 1 }
+        auth:
+          type: object
+          properties:
+            device_login: { type: boolean }
+
+    Capabilities:
+      type: object
+      required: [protocol_version, minimum_cli_version, features]
+      properties:
+        protocol_version: { type: integer }
+        minimum_cli_version: { type: string }
+        features:
+          type: array
+          items: { type: string }
+          description: 功能开关名（如 task_lease/document_sync_v1/sse_resume）；未列出即不可用
+
+    DeviceAuthorization:
+      type: object
+      required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval]
+      properties:
+        device_code: { type: string, description: opaque secret，≥128-bit；只出现在本响应 }
+        user_code: { type: string, description: 人类输入比对用，如 ABCD-EFGH }
+        verification_uri: { type: string, format: uri }
+        verification_uri_complete: { type: string, format: uri }
+        expires_in: { type: integer, default: 600 }
+        interval: { type: integer, default: 3, description: 轮询间隔秒数 }
+
+    TokenPair:
+      type: object
+      required: [access_token, token_type, expires_in, refresh_token]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_in: { type: integer, description: 5~15 分钟 }
+        refresh_token: { type: string, description: rotating；重放触发整族撤销 }
+        actor_id: { $ref: "#/components/schemas/Id" }
+
+    DeviceAuthorizationView:
+      type: object
+      required: [id, user_code, client_type, status, created_at, expires_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        user_code: { type: string }
+        client_type: { type: string, enum: [cli, web] }
+        status: { type: string, enum: [pending, approved, denied, exchanged, expired] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    Me:
+      type: object
+      required: [actor]
+      properties:
+        actor: { $ref: "#/components/schemas/Actor" }
+        session:
+          type: object
+          properties:
+            client_type: { type: string, enum: [cli, web] }
+            expires_at: { type: string, format: date-time }
+
+    Actor:
+      type: object
+      required: [id, kind, display_name]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { type: string, enum: [human, agent, service] }
+        display_name: { type: string }
+
+    Role:
+      type: string
+      enum: [viewer, contributor, agent, maintainer, owner]
+      description: scope bundle 名；授权按最终 scope 计算
+
+    WorkspaceCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 200 }
+        slug: { type: string, maxLength: 200 }
+
+    WorkspaceUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, maxLength: 200 }
+        slug: { type: string, maxLength: 200 }
+
+    Workspace:
+      type: object
+      required: [id, name, slug, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        name: { type: string }
+        slug: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Member:
+      type: object
+      required: [actor, role]
+      properties:
+        actor: { $ref: "#/components/schemas/Actor" }
+        role: { $ref: "#/components/schemas/Role" }
+
+    MemberAdd:
+      type: object
+      required: [actor_id, role]
+      properties:
+        actor_id: { $ref: "#/components/schemas/Id" }
+        role: { $ref: "#/components/schemas/Role" }
+
+    TaskStatus:
+      type: string
+      enum: [open, in_progress, blocked, review, done, cancelled]
+
+    TaskPriority:
+      type: string
+      enum: [low, normal, high, urgent]
+
+    TaskCreate:
+      type: object
+      required: [title]
+      properties:
+        parent_id: { $ref: "#/components/schemas/Id" }
+        title: { type: string, minLength: 1, maxLength: 500 }
+        description: { type: string, default: "" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        tags: { type: array, items: { type: string }, description: 已存在 tag 名（新建走 proposal） }
+
+    TaskUpdate:
+      type: object
+      required: [expected_revision]
+      properties:
+        expected_revision: { type: integer, format: int64, minimum: 1 }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        parent_id: { $ref: "#/components/schemas/IdOrNull" }
+        assignee_actor_id: { $ref: "#/components/schemas/IdOrNull" }
+
+    Task:
+      type: object
+      required: [id, workspace_id, title, status, revision, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/Id" }
+        parent_id: { $ref: "#/components/schemas/IdOrNull" }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        assignee_actor_id: { $ref: "#/components/schemas/IdOrNull" }
+        revision: { type: integer, format: int64 }
+        tags: { type: array, items: { $ref: "#/components/schemas/Tag" } }
+        lease: { $ref: "#/components/schemas/LeaseOrNull" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Lease:
+      type: object
+      required: [holder_actor_id, expires_at]
+      properties:
+        holder_actor_id: { $ref: "#/components/schemas/Id" }
+        expires_at: { type: string, format: date-time }
+        renewed_at: { type: string, format: date-time }
+
+    ClaimResult:
+      type: object
+      required: [task, lease]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        lease: { $ref: "#/components/schemas/Lease" }
+
+    Tag:
+      type: object
+      required: [id, workspace_id, name]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/Id" }
+        name: { type: string }
+
+    TagProposalRequest:
+      type: object
+      required: [action, name]
+      properties:
+        action: { type: string, enum: [create, rename, delete] }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        target_tag_id: { $ref: "#/components/schemas/Id" }
+
+    TagProposal:
+      type: object
+      required: [proposal_id, confirm_code, expires_at, existing_tags]
+      properties:
+        proposal_id: { $ref: "#/components/schemas/Id" }
+        confirm_code: { type: string, description: 短 TTL 校验码；confirm 时原样提交 }
+        expires_at: { type: string, format: date-time }
+        existing_tags:
+          type: array
+          items: { $ref: "#/components/schemas/Tag" }
+          description: 全量已有 tag，供 Agent 比对后三思
+
+    PresenceState:
+      type: string
+      enum: [idle, planning, working, waiting, blocked, reviewing]
+
+    PresenceInput:
+      type: object
+      required: [state]
+      properties:
+        state: { $ref: "#/components/schemas/PresenceState" }
+        current_task_id: { $ref: "#/components/schemas/Id" }
+        note: { type: string, maxLength: 500 }
+        ttl_seconds: { type: integer, minimum: 30, maximum: 300, default: 90 }
+
+    Presence:
+      type: object
+      required: [actor_id, state, last_heartbeat_at]
+      properties:
+        actor_id: { $ref: "#/components/schemas/Id" }
+        display_name: { type: string }
+        state: { type: string, description: 含派生值 offline（由 expires_at 判定） }
+        current_task_id: { $ref: "#/components/schemas/Id" }
+        note: { type: string }
+        last_heartbeat_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    MessageSend:
+      type: object
+      required: [target, body]
+      properties:
+        target:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [actor, workspace, task] }
+            id: { $ref: "#/components/schemas/Id" }
+        thread_id: { $ref: "#/components/schemas/IdOrNull" }
+        body: { type: string, minLength: 1, maxLength: 20000 }
+        metadata: { type: object, additionalProperties: true }
+
+    Message:
+      type: object
+      required: [id, workspace_id, sender_id, body, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/Id" }
+        thread_id: { $ref: "#/components/schemas/IdOrNull" }
+        sender_id: { $ref: "#/components/schemas/Id" }
+        body: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+
+    ManifestItem:
+      type: object
+      required: [path, revision, content_hash, size, updated_at]
+      properties:
+        path: { type: string, description: 仓库相对路径，'/' 分隔 }
+        revision: { type: integer, format: int64 }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$", description: CLI 本地 hash 必须与此算法/格式一致 }
+        size: { type: integer }
+        updated_at: { type: string, format: date-time }
+
+    Document:
+      type: object
+      required: [path, revision, content_hash, content, updated_at]
+      properties:
+        path: { type: string }
+        revision: { type: integer, format: int64 }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        content: { type: string, description: UTF-8 Markdown }
+        updated_at: { type: string, format: date-time }
+
+    DocumentPush:
+      type: object
+      required: [base_revision, base_hash, content]
+      properties:
+        base_revision: { type: integer, format: int64 }
+        base_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        content: { type: string }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$", description: 可选；服务端会重算并以重算值为准 }
+
+    Conflict:
+      type: object
+      required: [id, path, base_revision, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        path: { type: string }
+        base_revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    ConflictResolve:
+      type: object
+      required: [resolution]
+      properties:
+        resolution: { type: string, enum: [ours, theirs, merged, manual] }
+        content: { type: string, description: resolution=merged/manual 时的最终内容 }
+
+    AgentCreate:
+      type: object
+      required: [display_name]
+      properties:
+        display_name: { type: string, maxLength: 200 }
+        kind: { type: string, enum: [agent, service], default: agent }
+
+    Agent:
+      type: object
+      required: [id, kind, display_name]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { type: string, enum: [agent, service] }
+        display_name: { type: string }
+
+    CredentialCreate:
+      type: object
+      required: [scopes]
+      properties:
+        scopes:
+          type: array
+          items: { type: string }
+          description: 见 docs/architecture.md §10 scope 词表
+        expires_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+
+    CredentialIssued:
+      type: object
+      required: [credential_id, secret, scopes]
+      properties:
+        credential_id: { $ref: "#/components/schemas/Id" }
+        secret:
+          type: string
+          description: |
+            一次性明文，格式 `astral_<43字符base64url>`（A4）。CLI/Agent 以
+            `ASTRAL_TOKEN` 或 `Authorization: Bearer astral_...` 使用；
+            服务端只存 sha256 hash，丢失只能重签。
+        scopes: { type: array, items: { type: string } }
+        expires_at:
+          $ref: "#/components/schemas/DateTimeOrNull"
+
+    AuditEntry:
+      type: object
+      required: [id, action, outcome, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/IdOrNull" }
+        actor_id: { $ref: "#/components/schemas/IdOrNull" }
+        action: { type: string }
+        outcome: { type: string, enum: [allowed, denied, error] }
+        target_type: { type: string }
+        target_id: { $ref: "#/components/schemas/IdOrNull" }
+        details: { type: object, additionalProperties: true, description: 已 redaction }
+        created_at: { type: string, format: date-time }
+
+    # ---- 分页 envelope（protocol §5：cursor，不暴露 offset 语义）----
+    PageMeta:
+      type: object
+      required: [next_cursor]
+      properties:
+        next_cursor:
+          type: [string, "null"]
+          description: null 表示没有更多
+
+    WorkspacePage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Workspace" } }
+
+    MemberPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Member" } }
+
+    TaskPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Task" } }
+
+    TaskSearchPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/Task"
+                  - type: object
+                    properties:
+                      score: { type: number, description: fuzzy 排序分，仅 fuzzy 查询时出现 }
+
+    TagPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Tag" } }
+
+    MessagePage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Message" } }
+
+    AgentPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Agent" } }
