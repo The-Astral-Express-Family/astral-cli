@@ -10,8 +10,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <shellapi.h> // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
+// shellapi.h 单独成块放在 windows.h 后：它依赖 windows.h 的类型声明，
+// 空行分块可让 clang-format 的 include 排序不把它挪到 windows.h 之前。
 #include <windows.h>
+
+#include <shellapi.h> // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
 #else
 #include <sys/wait.h>
 #include <unistd.h>
