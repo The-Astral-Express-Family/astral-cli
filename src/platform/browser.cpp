@@ -3,8 +3,13 @@
 #include <string_view>
 
 #ifdef _WIN32
+// 依赖或生成代码可能已定义过这两个宏，直接 #define 会触发 -Werror 下的重定义告警。
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <shellapi.h>  // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
 #else

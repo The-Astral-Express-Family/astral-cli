@@ -136,7 +136,11 @@ TEST_CASE("tokens are stored as plain JSON fields") {
     store.save("srv_01", sample("access-A"));
 
     std::ifstream input(file);
-    std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    // rdbuf 拷贝而非 istreambuf_iterator：gcc13 在 -O3 下对后者报
+    // -Wnull-dereference 误报（streambuf gptr/egptr），/WX 会拒掉整次构建。
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const std::string content = buffer.str();
     REQUIRE(content.find("\"access_token\": \"access-A\"") != std::string::npos);
     REQUIRE(content.find("\"srv_01\"") != std::string::npos);
 }

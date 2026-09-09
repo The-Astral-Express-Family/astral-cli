@@ -1,11 +1,17 @@
 #include "output/tty.hpp"
 
-#include <cstdlib>
+#include "core/env.hpp"  // getenv 收口在 core::env（MSVC 下 getenv 触发 C4996/-WX）
+
 #include <string>
 
 #ifdef _WIN32
+// 同 browser.cpp：宏可能已被传递包含定义过，需守卫避免 -Werror 拒编。
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <io.h>
 #include <windows.h>
 #else
@@ -25,8 +31,8 @@ bool fdIsTty(int fd) {
 }
 
 bool noColorRequested() {
-    const char* value = std::getenv("NO_COLOR");
-    return value != nullptr && *value != '\0';
+    // NO_COLOR 约定（no-color.org）：存在且非空即禁用颜色。
+    return astral::core::env::get("NO_COLOR").has_value();
 }
 
 } // namespace
