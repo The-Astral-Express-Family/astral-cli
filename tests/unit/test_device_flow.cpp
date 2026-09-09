@@ -80,9 +80,9 @@ void noSleep(std::chrono::milliseconds) {}
 } // namespace
 
 TEST_CASE("device flow completes after a pending poll") {
-    FakeHttp fake{kWellKnown,
-                  kAuthorization,
-                  {{400, errorEnvelope("AUTHORIZATION_PENDING")}, {200, kTokenPair}}};
+    FakeHttp fake{.wellKnownBody = kWellKnown,
+                  .createBody = kAuthorization,
+                  .polls = {{400, errorEnvelope("AUTHORIZATION_PENDING")}, {200, kTokenPair}}};
     std::vector<std::chrono::milliseconds> sleeps;
     std::optional<std::string> shownUrl;
     std::optional<std::string> shownCode;
@@ -112,11 +112,11 @@ TEST_CASE("device flow completes after a pending poll") {
 }
 
 TEST_CASE("slow_down extends the polling interval by five seconds") {
-    FakeHttp fake{kWellKnown,
-                  kAuthorization,
-                  {{400, errorEnvelope("SLOW_DOWN")},
-                   {400, errorEnvelope("AUTHORIZATION_PENDING")},
-                   {200, kTokenPair}}};
+    FakeHttp fake{.wellKnownBody = kWellKnown,
+                  .createBody = kAuthorization,
+                  .polls = {{400, errorEnvelope("SLOW_DOWN")},
+                            {400, errorEnvelope("AUTHORIZATION_PENDING")},
+                            {200, kTokenPair}}};
     std::vector<std::chrono::milliseconds> sleeps;
 
     runDeviceFlow("https://s.example.com", refHttp(fake),
@@ -128,7 +128,9 @@ TEST_CASE("slow_down extends the polling interval by five seconds") {
 }
 
 TEST_CASE("denied approval maps to AUTH_REQUIRED") {
-    FakeHttp fake{kWellKnown, kAuthorization, {{401, errorEnvelope("TOKEN_REVOKED")}}};
+    FakeHttp fake{.wellKnownBody = kWellKnown,
+                  .createBody = kAuthorization,
+                  .polls = {{401, errorEnvelope("TOKEN_REVOKED")}}};
     try {
         runDeviceFlow("https://s.example.com", refHttp(fake), noSleep, {});
         FAIL("expected AstralError");
@@ -140,12 +142,11 @@ TEST_CASE("denied approval maps to AUTH_REQUIRED") {
 
 TEST_CASE("device code expiry maps to TIMEOUT") {
     // expires_in=1s: the first 3s wait already passes the deadline.
-    FakeHttp fake{kWellKnown,
-                  R"({"device_code":"dev_abc","user_code":"ABCD-EFGH",)"
-                  R"("verification_uri":"https://s.example.com/device",)"
-                  R"("verification_uri_complete":"https://s.example.com/device?c=1",)"
-                  R"("expires_in":1,"interval":3})",
-                  {}};
+    FakeHttp fake{.wellKnownBody = kWellKnown,
+                  .createBody = R"({"device_code":"dev_abc","user_code":"ABCD-EFGH",)"
+                                R"("verification_uri":"https://s.example.com/device",)"
+                                R"("verification_uri_complete":"https://s.example.com/device?c=1",)"
+                                R"("expires_in":1,"interval":3})"};
     try {
         runDeviceFlow("https://s.example.com", refHttp(fake), noSleep, {});
         FAIL("expected AstralError");
@@ -155,8 +156,9 @@ TEST_CASE("device code expiry maps to TIMEOUT") {
 }
 
 TEST_CASE("protocol version mismatch is rejected before any code exchange") {
-    FakeHttp fake{
-        R"({"server_id":"srv_01","api_base":"/api/v1","protocol_version":99})", kAuthorization, {}};
+    FakeHttp fake{.wellKnownBody =
+                      R"({"server_id":"srv_01","api_base":"/api/v1","protocol_version":99})",
+                  .createBody = kAuthorization};
     try {
         runDeviceFlow("https://s.example.com", refHttp(fake), noSleep, {});
         FAIL("expected AstralError");
@@ -171,7 +173,7 @@ TEST_CASE("protocol version mismatch is rejected before any code exchange") {
 }
 
 TEST_CASE("a URL without a scheme is a local input error") {
-    FakeHttp fake{kWellKnown, kAuthorization, {}};
+    FakeHttp fake{.wellKnownBody = kWellKnown, .createBody = kAuthorization};
     try {
         runDeviceFlow("s.example.com", refHttp(fake), noSleep, {});
         FAIL("expected AstralError");
