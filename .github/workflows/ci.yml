@@ -65,7 +65,9 @@ jobs:
           - { os: ubuntu-24.04, arch: x64 }
           - { os: ubuntu-24.04-arm, arch: arm64 }
           - { os: macos-latest, arch: arm64 }
-          - { os: macos-13, arch: x64 } # last Intel image; switch to cross-compile when retired
+          # macos-13（最后的 Intel 镜像）已从队列饥饿到永不调度：
+          # 连续多次 run 排队满 24h 被 GitHub 取消，整条流水线因此恒红。
+          # Intel 覆盖等真正需要时再上 osxcross 交叉编译。
           - { os: windows-2022, arch: x64 }
     runs-on: ${{ matrix.os }}
     steps:
