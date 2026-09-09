@@ -58,7 +58,8 @@ std::unique_ptr<Command> makeLoginCommand() {
         "login", "Log in to an Astral server (device flow)", /*serverRequired=*/true,
         [](const CommandContext&, const std::string& serverUrl) {
             return "device-flow login lands with the auth client (see ARCHITECTURE.md section "
-                   "6); target: " + serverUrl;
+                   "6); target: " +
+                   serverUrl;
         });
 }
 
@@ -75,8 +76,8 @@ std::unique_ptr<Command> makeWhoamiCommand() {
     return std::make_unique<AuthStubCommand>(
         "whoami", "Show the authenticated principal for a server", /*serverRequired=*/false,
         [](const CommandContext& context, const std::string& serverUrl) {
-            const std::string target = serverUrl.empty() ? context.server.value_or("<bound server>")
-                                                         : serverUrl;
+            const std::string target =
+                serverUrl.empty() ? context.server.value_or("<bound server>") : serverUrl;
             return "whoami lands with the auth client; target: " + target;
         });
 }

@@ -1,6 +1,6 @@
 #include "output/tty.hpp"
 
-#include "core/env.hpp"  // getenv 收口在 core::env（MSVC 下 getenv 触发 C4996/-WX）
+#include "core/env.hpp" // getenv 收口在 core::env（MSVC 下 getenv 触发 C4996/-WX）
 
 #include <string>
 

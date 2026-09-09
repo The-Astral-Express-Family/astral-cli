@@ -10,8 +10,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <shellapi.h> // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
 #include <windows.h>
-#include <shellapi.h>  // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
 #else
 #include <sys/wait.h>
 #include <unistd.h>
