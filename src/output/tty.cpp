@@ -5,15 +5,9 @@
 #include <string>
 
 #ifdef _WIN32
-// 同 browser.cpp：宏可能已被传递包含定义过，需守卫避免 -Werror 拒编。
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+#include "platform/win_headers.hpp"
+
 #include <io.h>
-#include <windows.h>
 #else
 #include <unistd.h>
 #endif

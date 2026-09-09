@@ -8,6 +8,9 @@
 
 namespace astral::auth {
 
+// Seam for the login/init round (modulator repo TODO §11): no production
+// command consumes tokens yet — commands/* still refuse; do not delete.
+//
 // Token resolution policy (ARCHITECTURE.md section 6.3):
 //   ASTRAL_TOKEN (process env) wins over the credentials file
 //   (~/.astral-cli/credentials.json) and is never persisted; without

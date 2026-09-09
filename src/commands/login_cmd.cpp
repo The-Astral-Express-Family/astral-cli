@@ -57,7 +57,7 @@ std::unique_ptr<Command> makeLoginCommand() {
     return std::make_unique<AuthStubCommand>(
         "login", "Log in to an Astral server (device flow)", /*serverRequired=*/true,
         [](const CommandContext&, const std::string& serverUrl) {
-            return "device-flow login lands with the auth client (see ARCHITECTURE.md section "
+            return "device-flow login lands in the login/init round (see ARCHITECTURE.md section "
                    "6); target: " +
                    serverUrl;
         });
@@ -67,7 +67,7 @@ std::unique_ptr<Command> makeLogoutCommand() {
     return std::make_unique<AuthStubCommand>(
         "logout", "Forget credentials for a server", /*serverRequired=*/true,
         [](const CommandContext&, const std::string&) {
-            return std::string("logout lands with the auth client; it will erase the server "
+            return std::string("logout lands in the login/init round; it will erase the server "
                                "entry in ~/.astral-cli/credentials.json");
         });
 }
@@ -78,7 +78,7 @@ std::unique_ptr<Command> makeWhoamiCommand() {
         [](const CommandContext& context, const std::string& serverUrl) {
             const std::string target =
                 serverUrl.empty() ? context.server.value_or("<bound server>") : serverUrl;
-            return "whoami lands with the auth client; target: " + target;
+            return "whoami lands in the login/init round; target: " + target;
         });
 }
 

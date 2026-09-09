@@ -1,5 +1,7 @@
 #include "core/version.hpp"
 
+#include <nlohmann/json.hpp>
+
 namespace astral::core {
 
 const char* buildPlatform() {
@@ -18,6 +20,24 @@ const char* buildPlatform() {
 #else
     return "unknown";
 #endif
+}
+
+std::string identityString() {
+    return std::string(kProjectName) + " " + kProjectVersion + " (" + kGitDescribe + ", " +
+           buildPlatform() + ", protocol " + std::to_string(kProtocolVersion) + ")";
+}
+
+nlohmann::json identityFields(const bool withName) {
+    nlohmann::json fields = {
+        {"version", kProjectVersion},
+        {"git", kGitDescribe},
+        {"platform", buildPlatform()},
+        {"protocolVersion", kProtocolVersion},
+    };
+    if (withName) {
+        fields["name"] = kProjectName;
+    }
+    return fields;
 }
 
 } // namespace astral::core

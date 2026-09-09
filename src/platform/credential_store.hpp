@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -36,19 +35,6 @@ public:
     virtual void erase(const ServerId& server) = 0;
     // 已存凭证的 server_id 列表（doctor 展示用，不含任何 secret）。
     virtual std::vector<ServerId> list() const = 0;
-};
-
-// Ephemeral in-process store; used by tests.
-class MemoryCredentialStore final : public CredentialStore {
-public:
-    std::string_view backendName() const override { return "memory"; }
-    std::optional<Credential> load(const ServerId& server) const override;
-    void save(const ServerId& server, const Credential& credential) override;
-    void erase(const ServerId& server) override;
-    std::vector<ServerId> list() const override;
-
-private:
-    std::map<ServerId, Credential> entries_;
 };
 
 // JSON 文件实现。格式（按 server_id 为主键，一文件多服务器）：

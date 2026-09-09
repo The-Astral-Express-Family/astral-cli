@@ -37,7 +37,8 @@ public:
         (void)context;
         throw core::AstralError(core::Errc::CommandNotImplemented,
                                 std::string("'astral ") + name_ +
-                                    " ...' is not implemented yet (planned for v0.1)");
+                                    " ...' is not implemented yet (watch the login/init round in "
+                                    "the modulator repo TODO)");
     }
 
 private:

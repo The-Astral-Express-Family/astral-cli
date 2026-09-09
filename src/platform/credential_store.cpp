@@ -19,32 +19,6 @@ nlohmann::json freshRoot() {
 
 } // namespace
 
-std::optional<Credential> MemoryCredentialStore::load(const ServerId& server) const {
-    auto it = entries_.find(server);
-    if (it == entries_.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-void MemoryCredentialStore::save(const ServerId& server, const Credential& credential) {
-    entries_.insert_or_assign(server, credential);
-}
-
-void MemoryCredentialStore::erase(const ServerId& server) {
-    entries_.erase(server);
-}
-
-std::vector<ServerId> MemoryCredentialStore::list() const {
-    std::vector<ServerId> servers;
-    servers.reserve(entries_.size());
-    for (const auto& [server, credential] : entries_) {
-        (void)credential;
-        servers.push_back(server);
-    }
-    return servers;
-}
-
 FileCredentialStore::FileCredentialStore(std::filesystem::path file) : file_(std::move(file)) {}
 
 nlohmann::json FileCredentialStore::readRoot(bool tolerant) const {
@@ -121,11 +95,9 @@ std::optional<Credential> FileCredentialStore::load(const ServerId& server) cons
 
 void FileCredentialStore::save(const ServerId& server, const Credential& credential) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // tolerant：损坏/缺失的文件直接重建，所以 login 顺手就能修复坏文件。
+    // tolerant：损坏/缺失的文件直接重建（shape 校验保证 servers 必为 object），
+    // 所以 login 顺手就能修复坏文件。
     nlohmann::json root = readRoot(/*tolerant=*/true);
-    if (!root.contains("servers") || !root["servers"].is_object()) {
-        root["servers"] = nlohmann::json::object();
-    }
     root["servers"][server] = {
         {"principal_id", credential.principalId},
         {"access_token", credential.accessToken},
@@ -138,9 +110,7 @@ void FileCredentialStore::save(const ServerId& server, const Credential& credent
 void FileCredentialStore::erase(const ServerId& server) {
     std::lock_guard<std::mutex> lock(mutex_);
     nlohmann::json root = readRoot(/*tolerant=*/true);
-    if (root.contains("servers") && root["servers"].is_object()) {
-        root["servers"].erase(server);
-    }
+    root["servers"].erase(server);
     writeRoot(root);
 }
 

@@ -59,7 +59,14 @@
         "presence 语义定为 (actor, workspace) 一行（migration 00010）",
         "私信发送校验收件人 workspace 可达性（成员或绑定 credential），不可达 404",
         "refresh 并发轮换改条件更新：输家 401，不触发整族撤销",
-        "error.schema.json 去除过时 todo_phase_4 注记",
+        "error.schema.json 去除过时 todo_phase_4 注记"
+      ]
+    },
+    {
+      "date": "2026-09-09",
+      "from_commit": "dbea374",
+      "to_commit": "f9b01df",
+      "changes": [
         "T-ws-6：新增 approvals 端点（POST/GET /workspaces/{id}/approvals、POST /approvals/{id}/approve|deny，architecture §22）与错误码 APPROVAL_EXPIRED（409）；MVP 仅开放 membership.promote_owner"
       ]
     },

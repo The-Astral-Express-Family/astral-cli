@@ -17,7 +17,7 @@ astral version                 # 版本信息（已可用）
 ```
 
 - Human 输出带颜色（遵循 `NO_COLOR`、TTY 检测）；`--json` 模式 stdout 恒为单个 JSON 对象，进度/诊断走 stderr。
-- 退出码稳定：`0` 成功、`2` 用法错误、`3` 鉴权失败、`4` 未找到、`6` 网络、`7` 超时、`8` 本地工作区错误、`9` 协议不兼容。
+- 退出码稳定：`0` 成功、`1` 一般失败、`2` 用法错误、`3` 鉴权失败、`4` 未找到、`5` 冲突、`6` 网络、`7` 超时、`8` 本地工作区错误、`9` 协议不兼容。
 - 凭证存为普通 JSON 文件 `~/.astral-cli/credentials.json`（按 `server_id` 管理多服务器登录态，0600 权限，原子写入）——不依赖 keyring，三端一致，`cat` 可查、`cp` 可备份；`ASTRAL_TOKEN` 优先于该文件且不落盘。
 
 ## 环境要求
@@ -81,13 +81,15 @@ sh scripts/setup.sh          # Windows 亦可: powershell scripts/setup.ps1
 之后每次 `git commit` 都会校验提交信息（`feat(todo): ...` ✅ / `bad message` ❌）。
 紧急绕过：`git commit --no-verify`。
 
-提交类型：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`。
+提交类型：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert` `protocol`
+（`protocol` 用于协议快照同步提交）。
 
 ## CI / CD（GitHub Actions）
 
-- **CI**（`.github/workflows/ci.yml`）：提交信息校验 → clang-format 检查 → 5 平台矩阵构建 + 单测 + 冒烟
-  （ubuntu-x64/arm64、macos-arm64/x64、windows-x64），Linux 额外跑协议契约测试。
-- **Release**（`.github/workflows/release.yml`）：打 `v*` 标签触发，5 目标产物打包（tar.gz/zip）+
+- **CI**（`.github/workflows/ci.yml`）：提交信息校验 → clang-format 检查 → 4 平台矩阵构建 + 单测 + 冒烟
+  （ubuntu-x64/arm64、macos-arm64、windows-x64），Linux 额外跑协议契约测试。
+  （macos-13/x64 已移除：该 runner 长期排队超 24h 必被取消，Intel 包待交叉编译方案。）
+- **Release**（`.github/workflows/release.yml`）：打 `v*` 标签触发，4 目标产物打包（tar.gz/zip）+
   SHA256SUMS + GitHub Release。Linux 产物以 ubuntu-24.04 为 glibc 基线。
 
 ## 目录结构

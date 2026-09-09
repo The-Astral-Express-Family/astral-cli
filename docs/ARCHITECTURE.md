@@ -420,6 +420,12 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 - 错误通过稳定 `error.code` 表达；
 - 不输出 token secret。
 
+`--json` 错误 envelope 的刻意子集（当前阶段）：CLI 本地错误输出
+`{"error": {"code", "message"}}`；协议 envelope（error.schema.json）中的
+`retryable`/`request_id` 待 HTTP client 接入命令层后补齐——`request_id`
+需要透传响应头，`retryable` 需要与错误映射表对齐。补齐前不改动 error.code
+语义，客户端可安全按 code 分支。
+
 建议顶层退出码：
 
 ```text
@@ -469,13 +475,11 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 ├─ cmake/
 ├─ src/
 │  ├─ app/
-│  ├─ commands/
-│  │  ├─ login/
-│  │  ├─ init/
-│  │  ├─ workspace/
-│  │  ├─ todo/
-│  │  ├─ tags/
-│  │  └─ ...
+│  ├─ commands/        # 扁平文件，一个顶层名词一个 <noun>_cmd.cpp
+│  │  ├─ login_cmd.cpp
+│  │  ├─ init_cmd.cpp
+│  │  ├─ todo_cmd.cpp / tags_cmd.cpp / msg_cmd.cpp（随实装增加）
+│  │  └─ registry.cpp
 │  ├─ client/
 │  ├─ auth/
 │  ├─ workspace/

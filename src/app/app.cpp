@@ -106,9 +106,8 @@ int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
         err << app.help();
         return static_cast<int>(core::ExitCode::Success);
     } catch (const CLI::CallForVersion& version) {
-        out << "astral " << core::kProjectVersion << " (" << core::buildPlatform() << ", protocol "
-            << core::kProtocolVersion << ")\n";
         (void)version;
+        out << core::identityString() << "\n";
         return static_cast<int>(core::ExitCode::Success);
     } catch (const CLI::ParseError& parseError) {
         // Usage failures are exit code 2 (ARCHITECTURE.md section 12).

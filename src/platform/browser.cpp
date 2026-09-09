@@ -3,17 +3,10 @@
 #include <string_view>
 
 #ifdef _WIN32
-// 依赖或生成代码可能已定义过这两个宏，直接 #define 会触发 -Werror 下的重定义告警。
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-// shellapi.h 单独成块放在 windows.h 后：它依赖 windows.h 的类型声明，
-// 空行分块可让 clang-format 的 include 排序不把它挪到 windows.h 之前。
-#include <windows.h>
+#include "platform/win_headers.hpp"
 
+// shellapi.h 排在 win_headers 之后（依赖 windows.h 的类型声明）；
+// 与系统头空行分块，避免 clang-format 的 include 排序把它挪到前面。
 #include <shellapi.h> // ShellExecuteA：LEAN_AND_MEAN 不含 shell API
 #else
 #include <sys/wait.h>

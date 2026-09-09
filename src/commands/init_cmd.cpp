@@ -11,8 +11,8 @@ namespace {
 
 // `astral init <server_url>[/<workspace_name>] [path]` follows the state
 // machine in ARCHITECTURE.md section 9.3. The scaffold implements the pure
-// input-parsing half (and exposes it for tests) and defers the
-// discovery/credential/write phases until the HTTP client is wired.
+// input-parsing half (and exposes it for tests); the discovery/credential/
+// write phases land in the login/init round (modulator TODO §11 D12/D13).
 class InitCommand final : public Command {
 public:
     const char* name() const override { return "init"; }
@@ -38,10 +38,10 @@ public:
         const std::string note = spec.workspaceName
                                      ? "workspace candidate '" + *spec.workspaceName + "'"
                                      : std::string("no workspace candidate");
-        throw core::AstralError(
-            core::Errc::CommandNotImplemented,
-            "init's discovery/binding phases land with the HTTP client; parsed target: server '" +
-                spec.fullUrl + "', " + note);
+        throw core::AstralError(core::Errc::CommandNotImplemented,
+                                "init's discovery/binding phases land in the login/init round; "
+                                "parsed target: server '" +
+                                    spec.fullUrl + "', " + note);
     }
 
 private:

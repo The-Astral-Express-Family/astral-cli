@@ -19,7 +19,8 @@ jobs:
           - { os: ubuntu-24.04, target: linux-x64, archive: tar.gz }
           - { os: ubuntu-24.04-arm, target: linux-arm64, archive: tar.gz }
           - { os: macos-latest, target: macos-arm64, archive: tar.gz }
-          - { os: macos-13, target: macos-x64, archive: tar.gz } # last Intel image
+          # macos-13（Intel/x64）已随 ci.yml 移除：排队满 24h 必被取消，
+          # release 流水线会同样卡死。Intel 包待 osxcross 交叉编译方案。
           - { os: windows-2022, target: windows-x64, archive: zip }
     env:
       ASTRAL_TARGET: ${{ matrix.target }}
