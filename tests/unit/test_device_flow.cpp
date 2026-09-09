@@ -21,11 +21,13 @@ struct ScriptedResponse {
 
 // Minimal scripted transport: request.URL -> (status, body), consumed in
 // order for poll calls; unmatched URLs fail the test loudly.
+// NSDMI on every member: C++ 下 -Wmissing-field-initializers 对省略字段
+// 依旧告警（指定初始化器也不豁免），全部给默认值才干净。
 struct FakeHttp {
     std::string wellKnownBody;
     std::string createBody;
-    std::vector<ScriptedResponse> polls;
-    std::vector<std::string> requestedUrls;
+    std::vector<ScriptedResponse> polls{};
+    std::vector<std::string> requestedUrls{};
 
     astral::client::HttpResponse operator()(const astral::client::HttpRequest& request) {
         requestedUrls.push_back(request.url);
