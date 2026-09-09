@@ -11,10 +11,14 @@ namespace astral::platform {
 
 namespace {
 
-constexpr int kCredentialsVersion = 1;
+// v2: 增加 sessions 槽（D12，human device-flow 登录态）。此前 login 未实装、
+// 市面不存在 v1 文件，直接升版不做迁移。
+constexpr int kCredentialsVersion = 2;
 
 nlohmann::json freshRoot() {
-    return nlohmann::json{{"version", kCredentialsVersion}, {"servers", nlohmann::json::object()}};
+    return nlohmann::json{{"version", kCredentialsVersion},
+                          {"servers", nlohmann::json::object()},
+                          {"sessions", nlohmann::json::object()}};
 }
 
 } // namespace
@@ -124,6 +128,70 @@ std::vector<ServerId> FileCredentialStore::list() const {
         }
     }
     return servers;
+}
+
+namespace {
+
+LoginSession sessionFromJson(const ServerId& key, const nlohmann::json& entry) {
+    LoginSession session;
+    session.serverUrl = key;
+    session.serverId = entry.value("server_id", std::string());
+    session.apiBase = entry.value("api_base", std::string());
+    session.accessToken = entry.value("access_token", std::string());
+    session.refreshToken = entry.value("refresh_token", std::string());
+    session.principalId = entry.value("principal_id", std::string());
+    return session;
+}
+
+nlohmann::json sessionToJson(const LoginSession& session) {
+    return {
+        {"server_id", session.serverId},       {"api_base", session.apiBase},
+        {"access_token", session.accessToken}, {"refresh_token", session.refreshToken},
+        {"principal_id", session.principalId},
+    };
+}
+
+} // namespace
+
+std::optional<LoginSession> FileCredentialStore::loadSession(const ServerId& serverUrl) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const nlohmann::json root = readRoot(/*tolerant=*/false);
+    const auto sessions = root.find("sessions");
+    if (sessions == root.end() || !sessions->is_object()) {
+        return std::nullopt;
+    }
+    const auto entry = sessions->find(serverUrl);
+    if (entry == sessions->end() || !entry->is_object()) {
+        return std::nullopt;
+    }
+    return sessionFromJson(serverUrl, *entry);
+}
+
+void FileCredentialStore::saveSession(const ServerId& serverUrl, const LoginSession& session) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nlohmann::json root = readRoot(/*tolerant=*/true);
+    root["sessions"][serverUrl] = sessionToJson(session);
+    root["version"] = kCredentialsVersion;
+    writeRoot(root);
+}
+
+void FileCredentialStore::eraseSession(const ServerId& serverUrl) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nlohmann::json root = readRoot(/*tolerant=*/true);
+    root["sessions"].erase(serverUrl);
+    writeRoot(root);
+}
+
+std::vector<ServerId> FileCredentialStore::listSessions() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<ServerId> urls;
+    const nlohmann::json root = readRoot(/*tolerant=*/false);
+    if (root.contains("sessions") && root["sessions"].is_object()) {
+        for (auto it = root["sessions"].begin(); it != root["sessions"].end(); ++it) {
+            urls.push_back(it.key());
+        }
+    }
+    return urls;
 }
 
 std::unique_ptr<CredentialStore> makeDefaultCredentialStore() {

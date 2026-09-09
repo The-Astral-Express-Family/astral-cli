@@ -3,22 +3,27 @@
 `astral` —— Astral 服务的 C++ 命令行客户端。跨平台（Windows / macOS / Linux，x64 + arm64），
 同时服务 Human 与 Agent 两类调用者：默认输出面向人，`--json` 提供稳定的机器契约。
 
-> 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 脚手架 ——
-> 命令面、错误码契约、HTTP/SSE 客户端骨架与构建/CI 链路就位，业务命令随协议对接逐步落地。
+> 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
+> auth 登录链路（device flow / whoami / logout / init 绑定）已接通协议快照 v1；
+> 任务/消息等业务命令与 SSE 随后续轮次落地。
 
 ## 功能速览
 
 ```text
-astral login <server_url>      # 设备码登录（规划中）
-astral init <url>[/<ws>] [path] # 绑定工作区（解析逻辑就位，联调中）
-astral todo / tags / msg ...   # 规划中（--json 契约已固定）
-astral doctor                  # 本地环境体检（已可用，离线）
-astral version                 # 版本信息（已可用）
+astral login <server_url>       # 设备码登录：拉起浏览器审批，轮询换取 token 对（已可用）
+astral whoami [server_url]      # 当前登录身份（401 自动惰性刷新一次，已可用）
+astral logout [server_url]      # 服务端登出 + 清除本地会话（已可用）
+astral init <url>[/<ws>] [path] # 绑定工作区（--create 可创建；--rebind 换绑，已可用）
+astral todo / tags / msg ...    # 规划中（--json 契约已固定）
+astral doctor                   # 本地体检 + 服务端连通性探测（已可用）
+astral version                  # 版本信息（已可用）
 ```
 
 - Human 输出带颜色（遵循 `NO_COLOR`、TTY 检测）；`--json` 模式 stdout 恒为单个 JSON 对象，进度/诊断走 stderr。
 - 退出码稳定：`0` 成功、`1` 一般失败、`2` 用法错误、`3` 鉴权失败、`4` 未找到、`5` 冲突、`6` 网络、`7` 超时、`8` 本地工作区错误、`9` 协议不兼容。
-- 凭证存为普通 JSON 文件 `~/.astral-cli/credentials.json`（按 `server_id` 管理多服务器登录态，0600 权限，原子写入）——不依赖 keyring，三端一致，`cat` 可查、`cp` 可备份；`ASTRAL_TOKEN` 优先于该文件且不落盘。
+- 凭证存为普通 JSON 文件 `~/.astral-cli/credentials.json`（双槽：human 会话按 server URL、
+  agent credential 按 `server_id`，0600 权限，原子写入，modulator TODO §11 D12）——不依赖
+  keyring，三端一致，`cat` 可查、`cp` 可备份；`ASTRAL_TOKEN` 优先于该文件且不落盘。
 
 ## 环境要求
 

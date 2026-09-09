@@ -144,3 +144,48 @@ TEST_CASE("tokens are stored as plain JSON fields") {
     REQUIRE(content.find("\"access_token\": \"access-A\"") != std::string::npos);
     REQUIRE(content.find("\"srv_01\"") != std::string::npos);
 }
+
+TEST_CASE("login sessions round-trip in their own slot (D12)") {
+    const fs::path file = makeTempFile();
+    FileCredentialStore store(file);
+
+    // Server-keyed credentials and URL-keyed sessions are independent slots.
+    store.save("srv_01", sample("access-A"));
+
+    astral::platform::LoginSession session;
+    session.serverUrl = "https://s.example.com";
+    session.serverId = "srv_01";
+    session.apiBase = "/api/v1";
+    session.accessToken = "at_x";
+    session.refreshToken = "rt_x";
+    session.principalId = "usr_01";
+    store.saveSession(session.serverUrl, session);
+
+    const auto loaded = store.loadSession("https://s.example.com");
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->serverUrl == "https://s.example.com");
+    CHECK(loaded->serverId == "srv_01");
+    CHECK(loaded->apiBase == "/api/v1");
+    CHECK(loaded->accessToken == "at_x");
+    CHECK(loaded->refreshToken == "rt_x");
+    CHECK(loaded->principalId == "usr_01");
+
+    REQUIRE(store.load("srv_01").has_value()); // untouched by session writes
+    CHECK(store.listSessions() == std::vector<std::string>{"https://s.example.com"});
+
+    // Rotation overwrites in place.
+    session.refreshToken = "rt_2";
+    store.saveSession(session.serverUrl, session);
+    CHECK(store.loadSession("https://s.example.com")->refreshToken == "rt_2");
+
+    store.eraseSession("https://s.example.com");
+    CHECK(!store.loadSession("https://s.example.com").has_value());
+    CHECK(store.listSessions().empty());
+}
+
+TEST_CASE("missing session slot reads as logged out") {
+    const fs::path file = makeTempFile();
+    FileCredentialStore store(file);
+    CHECK(!store.loadSession("https://s.example.com").has_value());
+    CHECK(store.listSessions().empty());
+}
