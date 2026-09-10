@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/The-Astral-Express-Family/astral-modulator/main/api/schemas/event.json",
+  "title": "Astral Event Envelope",
+  "description": "SSE/未来 WebSocket 共用的事件 envelope。事件 payload 契约的事实来源（docs/protocol.md §14-15）。服务端 internal/modules/event/types.go 必须与此同步。",
+  "type": "object",
+  "required": [
+    "id",
+    "type",
+    "occurred_at",
+    "schema_version",
+    "data"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "evt_ 前缀；等于 SSE id 行，resume 游标即此值"
+    },
+    "type": {
+      "$ref": "#/$defs/EventType"
+    },
+    "workspace_id": {
+      "type": "string",
+      "description": "缺省表示服务器级事件"
+    },
+    "actor_id": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "resource_revision": {
+      "type": "integer",
+      "description": "事件对应资源的 revision，用于客户端检测漏事件/乱序"
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "workspace.member.changed",
+        "actor.presence.changed",
+        "task.created",
+        "task.claimed",
+        "task.lease.expired",
+        "task.updated",
+        "task.released",
+        "document.updated",
+        "document.conflict",
+        "message.created",
+        "security.credential.created",
+        "security.credential.revoked",
+        "tag.created",
+        "tag.renamed",
+        "tag.deleted",
+        "snapshot.required",
+        "human.override"
+      ]
+    }
+  },
+  "notes": {
+    "payload_todo": "为每个事件 type 定义 data payload 的 $defs（当前 data 为开放对象）",
+    "keepalive": "keepalive 使用 SSE 注释行（: keepalive），不占事件 ID 序列",
+    "resume": "SSE resume：Last-Event-ID 头或 last_event_id query 参数；保留窗口 24h（S1），超窗下发 snapshot.required(reason=cursor_expired) 后断流"
+  }
+}

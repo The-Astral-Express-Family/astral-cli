@@ -10,8 +10,8 @@
 // The snapshot under test mirrors the discovery document shape from
 // ARCHITECTURE.md section 5; when astral-modulator publishes new snapshots,
 // the required-field assertions here are the first thing to reconcile.
-TEST_CASE("v1 discovery snapshot keeps its promised fields") {
-    std::ifstream input(std::string(ASTRAL_PROTOCOL_DIR) + "/snapshots/v1/well-known.json");
+TEST_CASE("v2 discovery snapshot keeps its promised fields") {
+    std::ifstream input(std::string(ASTRAL_PROTOCOL_DIR) + "/snapshots/v2/well-known.json");
     REQUIRE(input.good());
 
     const auto doc = nlohmann::json::parse(input);
@@ -24,7 +24,7 @@ TEST_CASE("v1 discovery snapshot keeps its promised fields") {
 }
 
 TEST_CASE("this CLI speaks the snapshot protocol version") {
-    std::ifstream input(std::string(ASTRAL_PROTOCOL_DIR) + "/snapshots/v1/well-known.json");
+    std::ifstream input(std::string(ASTRAL_PROTOCOL_DIR) + "/snapshots/v2/well-known.json");
     REQUIRE(input.good());
 
     const auto doc = nlohmann::json::parse(input);

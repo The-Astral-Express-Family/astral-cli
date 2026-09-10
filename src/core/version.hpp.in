@@ -11,7 +11,7 @@ inline constexpr const char* kProjectVersion = "@PROJECT_VERSION@";
 inline constexpr const char* kGitDescribe = "@ASTRAL_GIT_DESCRIBE@";
 
 // Protocol version this CLI speaks; see ARCHITECTURE.md section 5.
-inline constexpr int kProtocolVersion = 1;
+inline constexpr int kProtocolVersion = 2;
 
 const char* buildPlatform();
 

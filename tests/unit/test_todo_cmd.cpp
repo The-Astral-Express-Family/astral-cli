@@ -152,8 +152,8 @@ std::string errorEnvelopeBody(const std::string& code, const std::string& messag
 const std::string kWellKnown = json{{"server_id", "srv_test"},
                                     {"canonical_url", "https://api.test"},
                                     {"api_base", "/api/v1"},
-                                    {"protocol_version", 1},
-                                    {"min_cli_protocol_version", 1}}
+                                    {"protocol_version", 2},
+                                    {"min_cli_protocol_version", 2}}
                                    .dump();
 
 const json kTaskOne = json{
@@ -258,7 +258,7 @@ private:
 
 TEST_CASE("todo list --json prints the page plus workspace context") {
     TodoFixture fx;
-    fx.fake().route("/workspaces/ws_1/tasks", 200, kTaskPage);
+    fx.fake().route("/workspaces/ws_1/children", 200, kTaskPage);
 
     const RunResult result = runApp({"astral", "todo", "list", "--json"});
     REQUIRE(result.exitCode == 0);
@@ -271,16 +271,16 @@ TEST_CASE("todo list --json prints the page plus workspace context") {
 
     REQUIRE(fx.fake().requests.size() == 2); // well-known + list
     REQUIRE(fx.fake().requests[0].url.find("/.well-known/astral") != std::string::npos);
-    REQUIRE(fx.fake().requests[1].url.find("/workspaces/ws_1/tasks") != std::string::npos);
+    REQUIRE(fx.fake().requests[1].url.find("/workspaces/ws_1/children") != std::string::npos);
     // ASTRAL_TOKEN path: bearer is the env credential.
     REQUIRE(requestHasBearer(fx.fake().requests[1], "astral_testtoken"));
 }
 
 TEST_CASE("todo list --all follows the server cursor and merges pages") {
     TodoFixture fx;
-    fx.fake().route("/workspaces/ws_1/tasks", 200,
+    fx.fake().route("/workspaces/ws_1/children", 200,
                     json{{"items", json::array({kTaskOne})}, {"next_cursor", "50"}});
-    fx.fake().route("/workspaces/ws_1/tasks", 200,
+    fx.fake().route("/workspaces/ws_1/children", 200,
                     json{{"items", json::array({kTaskOne})}, {"next_cursor", nullptr}});
 
     const RunResult result = runApp({"astral", "todo", "list", "--all", "--json"});
@@ -301,7 +301,7 @@ TEST_CASE("todo list --all follows the server cursor and merges pages") {
 
 TEST_CASE("todo list human output carries id, status and title without escapes") {
     TodoFixture fx;
-    fx.fake().route("/workspaces/ws_1/tasks", 200, kTaskPage);
+    fx.fake().route("/workspaces/ws_1/children", 200, kTaskPage);
 
     const RunResult result = runApp({"astral", "todo", "list"});
     REQUIRE(result.exitCode == 0);
@@ -326,7 +326,7 @@ TEST_CASE("todo show --json returns the task verbatim including tags") {
 
 TEST_CASE("todo add posts the create body and prints the created task") {
     TodoFixture fx;
-    fx.fake().route("/workspaces/ws_1/tasks", 201, kTaskOne);
+    fx.fake().route("/workspaces/ws_1/children", 201, kTaskOne);
 
     const RunResult result =
         runApp({"astral", "todo", "add", "Fix login flow", "--priority", "high", "--json"});
@@ -429,7 +429,7 @@ TEST_CASE("server 404 surfaces as exit 4 with the protocol code") {
 
 TEST_CASE("stale env token 401 maps to auth failure with protocol code") {
     TodoFixture fx;
-    fx.fake().route("/workspaces/ws_1/tasks", 401,
+    fx.fake().route("/workspaces/ws_1/children", 401,
                     json::parse(errorEnvelopeBody("TOKEN_EXPIRED", "access token expired", true)));
 
     const RunResult result = runApp({"astral", "todo", "list", "--json"});
@@ -450,9 +450,9 @@ TEST_CASE("expired human session refreshes once and replays the request") {
                          {"actor_id", "usr_1"}});
     // First list attempt 401s; the post-refresh replay is served by the
     // second, later-declared route.
-    fx.fake().route("/workspaces/ws_1/tasks", 401,
+    fx.fake().route("/workspaces/ws_1/children", 401,
                     json::parse(errorEnvelopeBody("TOKEN_EXPIRED", "access token expired")));
-    fx.fake().route("/workspaces/ws_1/tasks", 200, kTaskPage);
+    fx.fake().route("/workspaces/ws_1/children", 200, kTaskPage);
 
     const RunResult result = runApp({"astral", "todo", "list", "--json"});
     REQUIRE(result.exitCode == 0);
@@ -480,7 +480,7 @@ TEST_CASE("revoked refresh family clears the session and reports auth failure") 
     fx.fake().route("/auth/token/refresh", 401,
                     json::parse(errorEnvelopeBody("TOKEN_REVOKED", "family revoked")));
     // Triggers the refresh path with an initial 401.
-    fx.fake().route("/workspaces/ws_1/tasks", 401,
+    fx.fake().route("/workspaces/ws_1/children", 401,
                     json::parse(errorEnvelopeBody("TOKEN_EXPIRED", "access token expired")));
 
     const RunResult result = runApp({"astral", "todo", "list", "--json"});
@@ -490,7 +490,7 @@ TEST_CASE("revoked refresh family clears the session and reports auth failure") 
     REQUIRE_FALSE(store->loadSession("https://api.test").has_value());
 }
 
-TEST_CASE("todo search without regex or fuzzy is a usage error") {
+TEST_CASE("todo search with zero filters is a usage error") {
     TodoFixture fx;
     const RunResult result = runApp({"astral", "todo", "search", "--json"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
@@ -498,9 +498,24 @@ TEST_CASE("todo search without regex or fuzzy is a usage error") {
     REQUIRE(payload.at("error").at("code") == "USAGE");
 }
 
+TEST_CASE("todo search with a structured filter alone is valid in v2") {
+    TodoFixture fx;
+    fx.fake().route("/task-search", 200, json{{"items", json::array()}, {"next_cursor", nullptr}});
+
+    const RunResult result = runApp({"astral", "todo", "search", "--status", "open", "--json"});
+    REQUIRE(result.exitCode == 0);
+    std::string searchUrl;
+    for (const auto& request : fx.fake().requests) {
+        if (request.url.find("/task-search") != std::string::npos) {
+            searchUrl = request.url;
+        }
+    }
+    REQUIRE(searchUrl.find("status=open") != std::string::npos);
+}
+
 TEST_CASE("todo search encodes free-form query parameters") {
     TodoFixture fx;
-    fx.fake().route("/tasks/search", 200, json{{"items", json::array()}, {"next_cursor", nullptr}});
+    fx.fake().route("/task-search", 200, json{{"items", json::array()}, {"next_cursor", nullptr}});
 
     const RunResult result = runApp({"astral", "todo", "search", "--regex", "(login|auth)$",
                                      "--fuzzy", "log in", "--tag", "auth core", "--json"});
@@ -508,7 +523,7 @@ TEST_CASE("todo search encodes free-form query parameters") {
 
     std::string searchUrl;
     for (const auto& request : fx.fake().requests) {
-        if (request.url.find("/tasks/search") != std::string::npos) {
+        if (request.url.find("/task-search") != std::string::npos) {
             searchUrl = request.url;
         }
     }
@@ -517,6 +532,41 @@ TEST_CASE("todo search encodes free-form query parameters") {
     REQUIRE(searchUrl.find("regex=%28login%7Cauth%29%24") != std::string::npos);
     REQUIRE(searchUrl.find("fuzzy=log%20in") != std::string::npos);
     REQUIRE(searchUrl.find("tag=auth%20core") != std::string::npos);
+}
+
+TEST_CASE("todo list --parent switches to the task container collection") {
+    TodoFixture fx;
+    fx.fake().route("/tasks/task_1/children", 200, kTaskPage);
+
+    const RunResult result = runApp({"astral", "todo", "list", "--parent", "task_1", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("items").size() == 1);
+    bool sawContainerPath = false;
+    for (const auto& request : fx.fake().requests) {
+        if (request.url.find("/tasks/task_1/children") != std::string::npos) {
+            sawContainerPath = true;
+        }
+        REQUIRE(request.url.find("/workspaces/ws_1/children") == std::string::npos);
+    }
+    REQUIRE(sawContainerPath);
+}
+
+TEST_CASE("todo add --parent posts into the task container without a parent_id body") {
+    TodoFixture fx;
+    fx.fake().route("/tasks/task_9/children", 201, kTaskOne);
+
+    const RunResult result =
+        runApp({"astral", "todo", "add", "Write DDL", "--parent", "task_9", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& request = fx.fake().requests.back();
+    REQUIRE(request.method == "POST");
+    REQUIRE(request.url.find("/tasks/task_9/children") != std::string::npos);
+    const json body = json::parse(request.body);
+    REQUIRE(body.at("title") == "Write DDL");
+    REQUIRE_FALSE(body.contains("parent_id"));
 }
 
 TEST_CASE("todo without any resolvable target is a local workspace error") {

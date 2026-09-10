@@ -131,6 +131,7 @@ void printTaskTable(std::ostream& out, const json& items, bool withScore) {
     std::size_t idWidth = 2;
     std::size_t statusWidth = 6;
     std::size_t priorityWidth = 3;
+    std::size_t kidsWidth = 5;
     for (const auto& task : items) {
         idWidth = std::max(idWidth, scalarOr(task, "id").size());
         statusWidth = std::max(statusWidth, scalarOr(task, "status").size());
@@ -138,17 +139,17 @@ void printTaskTable(std::ostream& out, const json& items, bool withScore) {
     }
 
     auto emitRow = [&](const std::string& id, const std::string& status,
-                       const std::string& priority, const std::string& title,
-                       const std::string& score) {
+                       const std::string& priority, const std::string& kids,
+                       const std::string& title, const std::string& score) {
         out << padRight(id, idWidth) << "  " << padRight(status, statusWidth) << "  "
-            << padRight(priority, priorityWidth) << "  ";
+            << padRight(priority, priorityWidth) << "  " << padRight(kids, kidsWidth) << "  ";
         if (withScore) {
             out << padRight(score, 6) << "  ";
         }
         out << truncateUtf8(title, 48) << '\n';
     };
 
-    emitRow("ID", "STATUS", "PRI", "TITLE", "SCORE");
+    emitRow("ID", "STATUS", "PRI", "KIDS", "TITLE", "SCORE");
     for (const auto& task : items) {
         std::string score = "-";
         if (withScore) {
@@ -159,7 +160,11 @@ void printTaskTable(std::ostream& out, const json& items, bool withScore) {
                 score = buffer;
             }
         }
-        emitRow(scalarOr(task, "id"), scalarOr(task, "status"), scalarOr(task, "priority"),
+        std::string kids = "-";
+        if (auto it = task.find("children_count"); it != task.end() && it->is_number()) {
+            kids = it->dump();
+        }
+        emitRow(scalarOr(task, "id"), scalarOr(task, "status"), scalarOr(task, "priority"), kids,
                 scalarOr(task, "title"), score);
     }
 }
@@ -221,14 +226,21 @@ public:
         node_ = &app;
         app.require_subcommand(1);
 
-        CLI::App* list = app.add_subcommand("list", "List tasks (newest first)");
+        // v2（协议 2，D15）：list = 容器子任务集合——默认 workspace 根层，
+        // --parent <id> 切到 task 容器；只回传直接子层。
+        CLI::App* list =
+            app.add_subcommand("list", "List children of a container (workspace root by default)");
+        list->add_option("--parent", parent_,
+                         "List children of this task instead of the workspace root");
         list->add_option("--assignee", assignee_, "Filter by assignee actor id");
-        list->add_option("--parent", parent_, "Only direct children of this task");
+        list->add_option("--tag", tag_, "Filter by tag name");
         addPageFlags(*list, pageFlags_);
 
-        CLI::App* add = app.add_subcommand("add", "Create a task");
+        // v2：创建即投递进容器；无 --parent 落 workspace 根层。
+        CLI::App* add =
+            app.add_subcommand("add", "Create a task in a container (workspace root by default)");
         add->add_option("title", title_, "Task title")->required();
-        add->add_option("--parent", parent_, "Parent task id");
+        add->add_option("--parent", parent_, "Create as a child of this task");
         add->add_option("--priority", priority_, "Task priority")
             ->check(CLI::IsMember(
                 std::vector<std::string>{std::begin(kTaskPriorities), std::end(kTaskPriorities)}));
@@ -251,10 +263,14 @@ public:
         done->add_option("--revision", revision_,
                          "Expected revision (default: read the task's current revision)");
 
-        CLI::App* search = app.add_subcommand("search", "Search tasks (regex filter, fuzzy rank)");
+        // v2：平面查询走 task-search，结构化（tag/status/assignee）与内容
+        // （regex/fuzzy）平权，至少一个条件。
+        CLI::App* search = app.add_subcommand(
+            "search", "Flat workspace-wide task query (structured and/or content)");
         search->add_option("--regex", regex_, "RE2 regex over title+description (filter)");
         search->add_option("--fuzzy", fuzzy_, "Fuzzy text (ranking)");
         search->add_option("--tag", tag_, "Filter by tag name");
+        search->add_option("--assignee", assignee_, "Filter by assignee actor id");
         addPageFlags(*search, pageFlags_);
 
         listSub_ = list;
@@ -314,12 +330,15 @@ private:
     int runList(const CommandContext& context) {
         auto [api, ws] = openContext(context);
 
+        // v2 容器集合：--parent 切到 task 容器，否则 workspace 容器（根层）。
+        const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
+                                                 : "/tasks/" + parent_ + "/children";
         std::string query = pageQuery(pageFlags_);
-        appendParam(query, "parent_id", parent_);
+        appendParam(query, "tag", tag_);
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
-        const json items = fetchAllPages(api, "/workspaces/" + ws.workspaceId + "/tasks",
-                                         std::move(query), pageFlags_.all, "task list", nextCursor);
+        const json items =
+            fetchAllPages(api, path, std::move(query), pageFlags_.all, "task list", nextCursor);
 
         if (context.json) {
             output::printJson(
@@ -342,8 +361,12 @@ private:
     }
 
     int runSearch(const CommandContext& context) {
-        if (regex_.empty() && fuzzy_.empty()) {
-            throw core::AstralError(core::Errc::Usage, "todo search needs --regex or --fuzzy");
+        // v2：结构化与内容过滤平权，至少其一（与服务端 400 守卫同语义）。
+        if (regex_.empty() && fuzzy_.empty() && tag_.empty() && pageFlags_.status.empty() &&
+            assignee_.empty()) {
+            throw core::AstralError(
+                core::Errc::Usage,
+                "todo search needs at least one of --regex/--fuzzy/--tag/--status/--assignee");
         }
         auto [api, ws] = openContext(context);
 
@@ -353,9 +376,10 @@ private:
         appendParam(query, "regex", regex_);
         appendParam(query, "fuzzy", fuzzy_);
         appendParam(query, "tag", tag_);
+        appendParam(query, "assignee", assignee_);
         std::string nextCursor;
         const json items =
-            fetchAllPages(api, "/workspaces/" + ws.workspaceId + "/tasks/search", std::move(query),
+            fetchAllPages(api, "/workspaces/" + ws.workspaceId + "/task-search", std::move(query),
                           pageFlags_.all, "task search", nextCursor);
 
         if (context.json) {
@@ -377,10 +401,9 @@ private:
     int runAdd(const CommandContext& context) {
         auto [api, ws] = openContext(context);
 
+        // v2：创建即投递进容器——无 --parent 落 workspace 根层集合，
+        // 有 --parent 投递进该 task 的 children 集合（body 无 parent_id 字段）。
         json body{{"title", title_}};
-        if (!parent_.empty()) {
-            body["parent_id"] = parent_;
-        }
         if (!priority_.empty()) {
             body["priority"] = priority_;
         }
@@ -392,9 +415,11 @@ private:
             body["tags"] = tags_;
         }
 
+        const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
+                                                 : "/tasks/" + parent_ + "/children";
         client::HttpRequest request;
         request.method = "POST";
-        request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/tasks");
+        request.url = auth::apiUrl(api, path);
         request.body = body.dump();
         request.headers.emplace_back("Content-Type", "application/json");
         const json task = json::parse(api.requireSuccess(std::move(request), "task create").body);

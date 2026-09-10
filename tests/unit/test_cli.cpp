@@ -52,7 +52,7 @@ TEST_CASE("astral version prints human output and exits 0") {
     const auto result = run({"astral", "version"});
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.out.find("astral ") == 0);
-    REQUIRE(result.out.find("protocol 1") != std::string::npos);
+    REQUIRE(result.out.find("protocol 2") != std::string::npos);
 }
 
 TEST_CASE("astral version --json pins the machine contract") {
@@ -61,7 +61,7 @@ TEST_CASE("astral version --json pins the machine contract") {
 
     const auto payload = nlohmann::json::parse(result.out);
     REQUIRE(payload.at("name") == "astral");
-    REQUIRE(payload.at("protocolVersion") == 1);
+    REQUIRE(payload.at("protocolVersion") == 2);
     REQUIRE(payload.contains("version"));
     REQUIRE(payload.contains("platform"));
     REQUIRE(payload.contains("git"));

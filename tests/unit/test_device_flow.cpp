@@ -57,7 +57,7 @@ std::string errorEnvelope(const std::string& code) {
 
 const std::string kWellKnown = R"({
   "server_id": "srv_01", "canonical_url": "https://s.example.com",
-  "api_base": "/api/v1", "protocol_version": 1, "min_cli_protocol_version": 1
+  "api_base": "/api/v1", "protocol_version": 2, "min_cli_protocol_version": 2
 })";
 
 const std::string kAuthorization = R"({
