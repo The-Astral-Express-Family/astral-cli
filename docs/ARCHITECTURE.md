@@ -386,6 +386,13 @@ astral todo search --regex <expr> --fuzzy <text>
 regex filter -> fuzzy ranking
 ```
 
+v2 容器化语义（round 16，协议快照 v2）：`todo list` 列出容器子任务——默认
+workspace 根层，`--parent <task-id>` 切到该任务的 children 集合（只回传直接
+子层，行内带 tags/children_count）；`todo add --parent <task-id>` 投递进该
+任务的 children 集合（服务端 TaskCreate 已无 parent_id 字段）；`todo search`
+走 `/workspaces/{id}/task-search` 平面查询，regex/fuzzy 与
+tag/status/assignee 平权（至少一个条件）。
+
 `claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
 GET 任务当前 revision 再提交（读改写窗口由服务端 409
 `REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过

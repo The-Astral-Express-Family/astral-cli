@@ -17,7 +17,7 @@ astral whoami [server_url]      # 当前登录身份（401 自动惰性刷新一
 astral logout [server_url]      # 服务端登出 + 清除本地会话（已可用）
 astral init <url>[/<ws>] [path] # 绑定工作区（--create 可创建；--rebind 换绑，已可用）
 astral todo list/add/show/claim/done/search
-                                # 任务命令族：列表/创建/详情/原子认领/完结/搜索（已可用）
+                                # 任务命令族（协议 v2）：容器子任务列表/创建/详情/原子认领/完结/平面查询（已可用）
 astral tags / msg / event ...   # 规划中
 astral doctor                   # 本地体检 + 服务端连通性探测（已可用）
 astral version                  # 版本信息（已可用）
