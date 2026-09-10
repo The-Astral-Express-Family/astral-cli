@@ -26,6 +26,28 @@ HttpFn realHttp(std::chrono::milliseconds requestTimeout) {
     };
 }
 
+namespace {
+
+// Command-layer transport slot; empty std::function = fall through to
+// libcurl. Single shared slot so the test setter and commandHttp() agree.
+HttpFn& commandTransportSlot() {
+    static HttpFn slot;
+    return slot;
+}
+
+} // namespace
+
+HttpFn commandHttp() {
+    if (const HttpFn& slot = commandTransportSlot()) {
+        return slot;
+    }
+    return realHttp();
+}
+
+void setCommandTransportForTests(HttpFn transport) {
+    commandTransportSlot() = std::move(transport);
+}
+
 void realSleep(std::chrono::milliseconds duration) {
     std::this_thread::sleep_for(duration);
 }

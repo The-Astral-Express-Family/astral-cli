@@ -20,6 +20,12 @@ using SleepFn = std::function<void(std::chrono::milliseconds)>;
 HttpFn realHttp(std::chrono::milliseconds requestTimeout = std::chrono::seconds{30});
 void realSleep(std::chrono::milliseconds duration);
 
+// Transport used by command layers (business commands, not device flow).
+// Defaults to realHttp(); tests swap in a scripted fake. Process-global
+// because commands are built inside runApp without fixture access.
+HttpFn commandHttp();
+void setCommandTransportForTests(HttpFn transport); // nullptr resets to realHttp()
+
 // Result of discovery against /.well-known/astral.
 struct ServerInfo {
     std::string baseUrl;  // normalized input URL

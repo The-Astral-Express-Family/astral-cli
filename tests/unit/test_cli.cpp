@@ -85,7 +85,7 @@ TEST_CASE("no subcommand is a usage error (exit 2)") {
 }
 
 TEST_CASE("stub commands fail with a stable JSON error code") {
-    const auto result = run({"astral", "todo", "list", "--json"});
+    const auto result = run({"astral", "workspace", "list", "--json"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::GenericFailure));
 
     const auto payload = nlohmann::json::parse(result.out);

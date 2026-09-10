@@ -66,6 +66,23 @@ std::optional<std::string> HttpResponse::header(const std::string& name) const {
     return std::nullopt;
 }
 
+std::string urlEncode(const std::string& value) {
+    ensureCurlGlobalInit();
+    CURL* handle = curl_easy_init();
+    if (handle == nullptr) {
+        throw core::AstralError(core::Errc::Internal, "curl_easy_init failed");
+    }
+    char* escaped = curl_easy_escape(handle, value.c_str(), static_cast<int>(value.size()));
+    if (escaped == nullptr) {
+        curl_easy_cleanup(handle);
+        throw core::AstralError(core::Errc::Internal, "curl_easy_escape failed");
+    }
+    std::string result(escaped);
+    curl_free(escaped);
+    curl_easy_cleanup(handle);
+    return result;
+}
+
 HttpClient::HttpClient() : HttpClient(Options{}) {}
 
 HttpClient::HttpClient(Options options) : options_(std::move(options)) {

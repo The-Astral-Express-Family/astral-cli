@@ -6,8 +6,8 @@
 同时服务 Human 与 Agent 两类调用者：默认输出面向人，`--json` 提供稳定的机器契约。
 
 > 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
-> auth 登录链路（device flow / whoami / logout / init 绑定）已接通协议快照 v1；
-> 任务/消息等业务命令与 SSE 随后续轮次落地。
+> auth 登录链路（device flow / whoami / logout / init 绑定）与 `astral todo`
+> 任务命令族已接通协议快照 v1；tags/msg/SSE 随后续轮次落地。
 
 ## 功能速览
 
@@ -16,7 +16,9 @@ astral login <server_url>       # 设备码登录：拉起浏览器审批，轮�
 astral whoami [server_url]      # 当前登录身份（401 自动惰性刷新一次，已可用）
 astral logout [server_url]      # 服务端登出 + 清除本地会话（已可用）
 astral init <url>[/<ws>] [path] # 绑定工作区（--create 可创建；--rebind 换绑，已可用）
-astral todo / tags / msg ...    # 规划中（--json 契约已固定）
+astral todo list/add/show/claim/done/search
+                                # 任务命令族：列表/创建/详情/原子认领/完结/搜索（已可用）
+astral tags / msg / event ...   # 规划中
 astral doctor                   # 本地体检 + 服务端连通性探测（已可用）
 astral version                  # 版本信息（已可用）
 ```

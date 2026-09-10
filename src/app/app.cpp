@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "CLI/CLI.hpp"
+#include <nlohmann/json.hpp>
+
 #include "commands/command.hpp"
 #include "commands/registry.hpp"
 #include "core/error.hpp"
@@ -30,7 +32,21 @@ struct GlobalOptions {
 
 void printFailure(const commands::CommandContext& context, const core::AstralError& error) {
     if (context.json) {
-        output::printJsonError(context.out, error.codeString(), error.what());
+        // ARCHITECTURE.md section 12: protocol failures surface the server's
+        // stable error.code plus request_id/retryable so agents branch on the
+        // frozen contract; CLI-local failures keep CLI-local codes only.
+        nlohmann::json body{
+            {"code",
+             error.protocolCode() ? *error.protocolCode() : std::string(error.codeString())},
+            {"message", std::string(error.what())},
+        };
+        if (error.requestId()) {
+            body["request_id"] = *error.requestId();
+        }
+        if (error.retryable()) {
+            body["retryable"] = *error.retryable();
+        }
+        output::printJson(context.out, {{"error", std::move(body)}});
         return;
     }
     const output::Painter paint(context.color);

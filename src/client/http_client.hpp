@@ -25,6 +25,11 @@ struct HttpResponse {
     std::optional<std::string> header(const std::string& name) const;
 };
 
+// Percent-encodes a single query component (spaces, '&', '=', unicode...);
+// unreserved characters stay literal. Building query strings for server
+// parameters of free-form shape (regex/fuzzy) is mandatory, not cosmetic.
+std::string urlEncode(const std::string& value);
+
 // Thin libcurl wrapper. Bounded behavior only: no global retry loop here -
 // retry/backoff policy lives one layer up once wired to the real protocol
 // (ARCHITECTURE.md section 13).

@@ -386,6 +386,15 @@ astral todo search --regex <expr> --fuzzy <text>
 regex filter -> fuzzy ranking
 ```
 
+`claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
+GET 任务当前 revision 再提交（读改写窗口由服务端 409
+`REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过
+读取、原样提交。`list`/`search` 分页：默认单页，`--all` 跟随
+`next_cursor` 取尽；`--json` 输出单对象（含 `items` 与最终
+`next_cursor`），非流式 JSON Lines。目标解析（server/workspace）遵循
+第 10 节优先级；鉴权遵循 §6.3：`ASTRAL_TOKEN` 优先，否则 human 会话槽 +
+单次惰性刷新（D13）。
+
 Tag 采用“两步确认”，用于减少 Agent 随手制造重复 Tag：
 
 ```text
@@ -420,11 +429,13 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 - 错误通过稳定 `error.code` 表达；
 - 不输出 token secret。
 
-`--json` 错误 envelope 的刻意子集（当前阶段）：CLI 本地错误输出
-`{"error": {"code", "message"}}`；协议 envelope（error.schema.json）中的
-`retryable`/`request_id` 待 HTTP client 接入命令层后补齐——`request_id`
-需要透传响应头，`retryable` 需要与错误映射表对齐。补齐前不改动 error.code
-语义，客户端可安全按 code 分支。
+`--json` 错误 envelope（round 14 起补齐）：CLI 本地错误输出
+`{"error": {"code", "message"}}`（code 为 CLI 本地码，如
+`LOCAL_WORKSPACE_ERROR`）；来自服务端协议 envelope 的失败则透传冻结契约
+`{"error": {"code", "message", "request_id", "retryable"}}`，其中 `code` 为
+服务端稳定码（如 `TASK_ALREADY_CLAIMED`），退出码由 HTTP 状态映射
+（401/403→3、404→4、409→5、5xx→6、其余 4xx→9）。两类失败都可直接按
+`error.code` 分支。
 
 建议顶层退出码：
 

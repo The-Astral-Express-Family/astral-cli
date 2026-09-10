@@ -7,6 +7,7 @@
 #include "commands/doctor_cmd.hpp"
 #include "commands/init_cmd.hpp"
 #include "commands/login_cmd.hpp"
+#include "commands/todo_cmd.hpp"
 #include "commands/version_cmd.hpp"
 #include "core/error.hpp"
 
@@ -55,12 +56,10 @@ std::vector<std::unique_ptr<Command>> makeBuiltinCommands() {
     commands.push_back(makeLogoutCommand());
     commands.push_back(makeWhoamiCommand());
     commands.push_back(makeInitCommand());
+    commands.push_back(makeTodoCommand());
     commands.push_back(std::make_unique<StubbedNounCommand>(
         "workspace", "Inspect and manage workspaces",
         std::vector<std::string>{"list", "show", "create", "archive"}));
-    commands.push_back(std::make_unique<StubbedNounCommand>(
-        "todo", "Work with tasks",
-        std::vector<std::string>{"list", "add", "show", "claim", "done", "search"}));
     commands.push_back(std::make_unique<StubbedNounCommand>(
         "tags", "Manage tags (two-step proposal/confirm)",
         std::vector<std::string>{"list", "create", "rename", "delete"}));

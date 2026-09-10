@@ -2,6 +2,7 @@ configure_file(core/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/core/v
 
 add_library(astral_core STATIC
   app/app.cpp
+  auth/api.cpp
   auth/device_flow.cpp
   auth/session.cpp
   auth/token_provider.cpp
@@ -11,6 +12,7 @@ add_library(astral_core STATIC
   commands/init_cmd.cpp
   commands/login_cmd.cpp
   commands/registry.cpp
+  commands/todo_cmd.cpp
   commands/version_cmd.cpp
   core/env.cpp
   core/error.cpp
