@@ -1,5 +1,7 @@
 # astral-cli
 
+[![CI](https://github.com/The-Astral-Express-Family/astral-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/The-Astral-Express-Family/astral-cli/actions/workflows/ci.yml)
+
 `astral` —— Astral 服务的 C++ 命令行客户端。跨平台（Windows / macOS / Linux，x64 + arm64），
 同时服务 Human 与 Agent 两类调用者：默认输出面向人，`--json` 提供稳定的机器契约。
 
