@@ -101,32 +101,6 @@ std::string pageQuery(const PageFlags& flags) {
     return query;
 }
 
-// GETs {path}[?query] page by page, accumulating items. Opaque next_cursor
-// values come straight back as &cursor=...; --all follows until exhausted.
-// `nextCursor` receives the last observed cursor ("" when exhausted).
-json fetchAllPages(const auth::ApiSession& api, const std::string& path, std::string query,
-                   bool followAll, const std::string& what, std::string& nextCursor) {
-    json items = json::array();
-    while (true) {
-        client::HttpRequest request;
-        request.url = auth::apiUrl(api, query.empty() ? path : path + "?" + query);
-        const json body = json::parse(api.requireSuccess(std::move(request), what).body);
-        if (auto it = body.find("items"); it != body.end() && it->is_array()) {
-            for (const auto& item : *it) {
-                items.push_back(item);
-            }
-        }
-        const auto next = body.find("next_cursor");
-        const bool hasMore =
-            next != body.end() && next->is_string() && !next->get<std::string>().empty();
-        nextCursor = hasMore ? next->get<std::string>() : std::string();
-        if (!hasMore || !followAll) {
-            return items;
-        }
-        appendParam(query, "cursor", nextCursor);
-    }
-}
-
 void printTaskTable(std::ostream& out, const json& items, bool withScore) {
     std::size_t idWidth = 2;
     std::size_t statusWidth = 6;
@@ -306,12 +280,10 @@ public:
 private:
     // One session per command run: discovery happens exactly once and the
     // (possibly refreshed) session state stays warm for follow-up requests.
+    // Unresolvable targets get the D14 default-workspace hint from openWorkspace.
     std::pair<auth::ApiSession, auth::WorkspaceContext>
     openContext(const CommandContext& context) const {
-        const auth::LocalTarget local = auth::resolveLocalTarget(context.server, context.workspace);
-        auth::ApiSession api{local.serverUrl};
-        auth::WorkspaceContext ws = auth::resolveWorkspace(api, local);
-        return {std::move(api), std::move(ws)};
+        return auth::openWorkspace(context.server, context.workspace);
     }
 
     // claim/done need the server's current revision for optimistic
@@ -337,8 +309,8 @@ private:
         appendParam(query, "tag", tag_);
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
-        const json items =
-            fetchAllPages(api, path, std::move(query), pageFlags_.all, "task list", nextCursor);
+        const json items = auth::fetchPageItems(api, path, std::move(query), pageFlags_.all,
+                                                "task list", nextCursor);
 
         if (context.json) {
             output::printJson(
@@ -379,8 +351,8 @@ private:
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
         const json items =
-            fetchAllPages(api, "/workspaces/" + ws.workspaceId + "/task-search", std::move(query),
-                          pageFlags_.all, "task search", nextCursor);
+            auth::fetchPageItems(api, "/workspaces/" + ws.workspaceId + "/task-search",
+                                 std::move(query), pageFlags_.all, "task search", nextCursor);
 
         if (context.json) {
             output::printJson(

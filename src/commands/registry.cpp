@@ -7,6 +7,8 @@
 #include "commands/doctor_cmd.hpp"
 #include "commands/init_cmd.hpp"
 #include "commands/login_cmd.hpp"
+#include "commands/msg_cmd.hpp"
+#include "commands/tags_cmd.hpp"
 #include "commands/todo_cmd.hpp"
 #include "commands/version_cmd.hpp"
 #include "core/error.hpp"
@@ -57,17 +59,13 @@ std::vector<std::unique_ptr<Command>> makeBuiltinCommands() {
     commands.push_back(makeWhoamiCommand());
     commands.push_back(makeInitCommand());
     commands.push_back(makeTodoCommand());
+    commands.push_back(makeTagsCommand());
     commands.push_back(std::make_unique<StubbedNounCommand>(
         "workspace", "Inspect and manage workspaces",
         std::vector<std::string>{"list", "show", "create", "archive"}));
-    commands.push_back(std::make_unique<StubbedNounCommand>(
-        "tags", "Manage tags (two-step proposal/confirm)",
-        std::vector<std::string>{"list", "create", "rename", "delete"}));
     commands.push_back(std::make_unique<StubbedNounCommand>("status", "Show workspace status",
                                                             std::vector<std::string>{}));
-    commands.push_back(
-        std::make_unique<StubbedNounCommand>("msg", "Read and send workspace messages",
-                                             std::vector<std::string>{"send", "list", "show"}));
+    commands.push_back(makeMsgCommand());
     commands.push_back(
         std::make_unique<StubbedNounCommand>("document", "Manage workspace documents",
                                              std::vector<std::string>{"list", "show", "upsert"}));

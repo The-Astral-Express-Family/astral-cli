@@ -3,6 +3,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+
+#include <nlohmann/json.hpp>
 
 #include "auth/session.hpp"
 #include "client/http_client.hpp"
@@ -61,6 +64,21 @@ struct WorkspaceContext {
 };
 
 WorkspaceContext resolveWorkspace(ApiSession& api, const LocalTarget& local);
+
+// Combined preamble for workspace-scoped commands: local target resolution
+// (flag > binding > env), one session (exactly one discovery), then workspace
+// resolution. A bare LOCAL_WORKSPACE_ERROR / WORKSPACE_NOT_FOUND gets the D14
+// default-workspace hint appended (personal tasks live in
+// default/<your-name>/todo).
+std::pair<ApiSession, WorkspaceContext>
+openWorkspace(const std::optional<std::string>& flagServer,
+              const std::optional<std::string>& flagWorkspace);
+
+// Fetches {path}[?query] page by page, accumulating the `items` arrays.
+// Opaque next_cursor values feed &cursor=...; followAll walks until exhausted.
+// `nextCursor` receives the last observed cursor ("" when exhausted).
+nlohmann::json fetchPageItems(const ApiSession& api, const std::string& path, std::string query,
+                              bool followAll, const std::string& what, std::string& nextCursor);
 
 // Maps a non-2xx response to AstralError: exit code from the HTTP status,
 // message from the protocol envelope, and the server's error.code plus

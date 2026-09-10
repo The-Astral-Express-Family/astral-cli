@@ -402,6 +402,15 @@ GET 任务当前 revision 再提交（读改写窗口由服务端 409
 第 10 节优先级；鉴权遵循 §6.3：`ASTRAL_TOKEN` 优先，否则 human 会话槽 +
 单次惰性刷新（D13）。
 
+Tag/msg 命令已实装（round 19）。Tag 两步确认减少 Agent 随手制造重复 Tag；
+CLI 的确认命令在 propose 步输出完整可复制命令行（`--proposal <id> --confirm
+<code>` 与服务端绑定语义一一对应，无本地状态）。rename/delete 先经 tag 词典
+按名解析 `target_tag_id`（`tag_` 前缀参数直接作 id）。`msg send` 目标语法：
+`workspace`（广播）| `actor:<actor_id>` | `task:<task_id>`（任务线程），
+`--thread <msg_id>` 跟进；发送携带确定性 Idempotency-Key（内容 FNV-1a），
+重跑同一命令服务端 24h 内重放首次 2xx 不双发。`msg list --task <task_id>`
+走任务线程集合端点。`event listen`（SSE 流式消费）为后续轮次。
+
 Tag 采用“两步确认”，用于减少 Agent 随手制造重复 Tag：
 
 ```text

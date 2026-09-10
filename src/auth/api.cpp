@@ -163,4 +163,55 @@ WorkspaceContext resolveWorkspace(ApiSession& api, const LocalTarget& local) {
     return context;
 }
 
+std::pair<ApiSession, WorkspaceContext>
+openWorkspace(const std::optional<std::string>& flagServer,
+              const std::optional<std::string>& flagWorkspace) {
+    try {
+        const LocalTarget local = resolveLocalTarget(flagServer, flagWorkspace);
+        ApiSession api{local.serverUrl};
+        WorkspaceContext ws = resolveWorkspace(api, local);
+        return {std::move(api), std::move(ws)};
+    } catch (const core::AstralError& e) {
+        // D14 (modulator TODO §1): root-level/personal tasks live in a
+        // default/<user>/todo workspace; surface the convention wherever the
+        // workspace target is missing or unresolvable.
+        if (e.code() == core::Errc::LocalWorkspaceError ||
+            e.code() == core::Errc::WorkspaceNotFound) {
+            throw core::AstralError(
+                e.code(),
+                std::string(e.what()) +
+                    " (tip: keep personal tasks in a 'default/<your-name>/todo' "
+                    "workspace; create one with `astral init <server-url>/todo --create`)");
+        }
+        throw;
+    }
+}
+
+nlohmann::json fetchPageItems(const ApiSession& api, const std::string& path, std::string query,
+                              bool followAll, const std::string& what, std::string& nextCursor) {
+    nlohmann::json items = nlohmann::json::array();
+    while (true) {
+        client::HttpRequest request;
+        request.url = apiUrl(api, query.empty() ? path : path + "?" + query);
+        const nlohmann::json body =
+            nlohmann::json::parse(api.requireSuccess(std::move(request), what).body);
+        if (auto it = body.find("items"); it != body.end() && it->is_array()) {
+            for (const auto& item : *it) {
+                items.push_back(item);
+            }
+        }
+        const auto next = body.find("next_cursor");
+        const bool hasMore =
+            next != body.end() && next->is_string() && !next->get<std::string>().empty();
+        nextCursor = hasMore ? next->get<std::string>() : std::string();
+        if (!hasMore || !followAll) {
+            return items;
+        }
+        if (!query.empty()) {
+            query += '&';
+        }
+        query += "cursor=" + client::urlEncode(nextCursor);
+    }
+}
+
 } // namespace astral::auth
