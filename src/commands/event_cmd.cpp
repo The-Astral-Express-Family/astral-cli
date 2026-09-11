@@ -46,41 +46,6 @@ public:
     }
 
 private:
-    // Auth policy mirrors ApiSession::send (ARCHITECTURE.md section 6.3):
-    // ASTRAL_TOKEN wins outright and never refreshes; otherwise the human
-    // session slot rotates through /auth/token/refresh once per connection
-    // attempt (a revoked family erases the session and fails with
-    // AUTH_REQUIRED). Streaming responses never double-feed the parser: a 401
-    // body is buffered by sendStreaming, so the refresh replay is the only
-    // attempt that reaches the sink.
-    events::AttemptFn makeAttempt(platform::CredentialStore& store,
-                                  const auth::ServerInfo& server) const {
-        client::HttpClient http;
-        events::AttemptFn stream = [&http](const client::HttpRequest& request,
-                                           const client::ChunkSink& sink) {
-            return http.sendStreaming(request, sink);
-        };
-        if (auto envToken = core::env::get("ASTRAL_TOKEN"); envToken && !envToken->empty()) {
-            return [envToken = *envToken, stream = std::move(stream)](
-                       const client::HttpRequest& request, const client::ChunkSink& sink) {
-                client::HttpRequest authed = request;
-                authed.bearerToken = envToken;
-                return stream(authed, sink);
-            };
-        }
-        auto session = auth::requireSession(store, server.baseUrl);
-        const auth::HttpFn transport = auth::realHttp();
-        return [&store, &session, transport, stream = std::move(stream)](
-                   const client::HttpRequest& request, const client::ChunkSink& sink) {
-            return auth::withLazyRefresh(store, transport, session,
-                                         [&](const platform::LoginSession& s) {
-                                             client::HttpRequest authed = request;
-                                             authed.bearerToken = s.accessToken;
-                                             return stream(authed, sink);
-                                         });
-        };
-    }
-
     int runListen(const CommandContext& context) {
         // One session per run: discovery exactly once; unresolvable targets
         // get the D14 default-workspace hint from openWorkspace.
@@ -88,12 +53,53 @@ private:
         const std::string url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/events");
         context.err << "listening to " << url << " (Ctrl+C to stop)\n";
 
+        // Everything the attempt chain captures lives in this scope: the
+        // loop runs only while these locals are alive (a lambda capturing a
+        // by-ref local of a helper that already returned is use-after-free).
         auto store = platform::makeDefaultCredentialStore();
+        client::HttpClient http;
+        const auth::HttpFn transport = auth::realHttp();
+        platform::LoginSession session; // filled by the human-session branch below
+        const events::AttemptFn stream =
+            [&http](const client::HttpRequest& request, const client::ChunkSink& sink) {
+                return http.sendStreaming(request, sink);
+            };
+
+        // Auth policy mirrors ApiSession::send (ARCHITECTURE.md section 6.3):
+        // ASTRAL_TOKEN wins outright and never refreshes; otherwise the human
+        // session slot rotates through /auth/token/refresh once per connection
+        // attempt (a revoked family erases the session and fails with
+        // AUTH_REQUIRED). Streaming responses never double-feed the parser:
+        // a 401 body is buffered by sendStreaming, so the refresh replay is
+        // the only attempt that reaches the sink.
+        events::AttemptFn attempt;
+        if (auto envToken = core::env::get("ASTRAL_TOKEN"); envToken && !envToken->empty()) {
+            const std::string token = *envToken;
+            attempt = [token, stream](const client::HttpRequest& request,
+                                      const client::ChunkSink& sink) {
+                client::HttpRequest authed = request;
+                authed.bearerToken = token;
+                return stream(authed, sink);
+            };
+        } else {
+            session = auth::requireSession(*store, api.server().baseUrl);
+            attempt = [&store, &session, transport, stream](const client::HttpRequest& request,
+                                                            const client::ChunkSink& sink) {
+                return auth::withLazyRefresh(
+                    *store, transport, session,
+                    [&request, &sink, stream](const platform::LoginSession& s) {
+                        client::HttpRequest authed = request;
+                        authed.bearerToken = s.accessToken;
+                        return stream(authed, sink);
+                    });
+            };
+        }
+
         ListenOptions options;
         options.url = url;
         options.maxEvents = maxEvents_;
-        return events::runListenLoop(options, makeAttempt(*store, api.server()), auth::realSleep,
-                                     context.out, context.err, context.json);
+        return events::runListenLoop(options, attempt, auth::realSleep, context.out, context.err,
+                                     context.json);
     }
 
     CLI::App* node_ = nullptr;
