@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "commands/doctor_cmd.hpp"
+#include "commands/event_cmd.hpp"
 #include "commands/init_cmd.hpp"
 #include "commands/login_cmd.hpp"
 #include "commands/msg_cmd.hpp"
@@ -69,8 +70,7 @@ std::vector<std::unique_ptr<Command>> makeBuiltinCommands() {
     commands.push_back(
         std::make_unique<StubbedNounCommand>("document", "Manage workspace documents",
                                              std::vector<std::string>{"list", "show", "upsert"}));
-    commands.push_back(std::make_unique<StubbedNounCommand>(
-        "event", "Consume workspace event stream", std::vector<std::string>{"listen", "list"}));
+    commands.push_back(makeEventCommand());
     commands.push_back(std::make_unique<StubbedNounCommand>(
         "agent", "Manage agent credentials and sessions",
         std::vector<std::string>{"list", "register", "revoke"}));

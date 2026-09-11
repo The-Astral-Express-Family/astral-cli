@@ -8,7 +8,7 @@
 > 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
 > 已接通**协议快照 v2**（容器化任务树）：auth 链路（device flow / whoami /
 > logout / init 绑定）、`astral todo` / `astral tags` / `astral msg` 均已可用；
-> `astral event`（SSE 流式消费）为下一轮。
+> `astral event listen` 已实装（SSE -> JSON Lines，断线续传）。
 
 ## 功能速览
 
@@ -22,7 +22,7 @@ astral todo list/add/show/claim/done/search
 astral tags list/create/rename/delete
                                 # 标签词典 + 两步确认（propose → --confirm，已可用）
 astral msg send/list            # workspace/actor:<id>/task:<id> 消息与线程（已可用）
-astral event ...                # 规划中
+astral event listen ...         # 已实装（round 22）
 astral doctor                   # 本地体检 + 服务端连通性探测（已可用）
 astral version                  # 版本信息（已可用）
 ```

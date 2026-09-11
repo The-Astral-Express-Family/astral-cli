@@ -88,7 +88,7 @@ astral tags ...                # 已实装（round 19）
 astral status ...              # 桩（规划中）
 astral msg ...                 # 已实装（round 19）
 astral document ...            # 桩（phase-5，待裁决 M1）
-astral event ...               # 桩（event listen 为下一轮）
+astral event ...               # listen 已实装（round 22，SSE 流式 + 断线续传）
 astral agent ...               # 桩（规划中）
 astral doctor                  # 已实装
 astral version                 # 已实装
@@ -408,7 +408,11 @@ astral tags create urgent --proposal tgp_01… --confirm K7P4Q2
 `task:<task_id>`（任务线程），`--thread <msg_id>` 跟进；发送携带确定性
 Idempotency-Key（内容 FNV-1a），重跑同一命令服务端 24h 内重放首次 2xx
 不双发。`msg list --task <task_id>` 走任务线程集合端点。
-`event listen`（SSE 流式消费）为后续轮次。
+`event listen` 消费 workspace SSE 流（round 22）：stdout 每事件一行
+（--json 输出原始 envelope JSON Lines；人读模式输出 `时间 类型 ID`），
+断线/关流按指数退避重连并以 Last-Event-ID 续传，snapshot.required 后
+自动丢弃过期游标，401 经一次 lazy refresh 重放；403/404 等终态按协议
+错误码退出。`--max-events N` 消费满即干净退出（不含控制事件）。
 
 ## 12. Human 输出与 Agent 输出
 
@@ -458,8 +462,8 @@ Bound backend -> https://astral.example.com (ws_01…)
 - timeout。
 
 **未实装**（规划项，勿当现状依赖）：请求级 request ID 头、bounded retry、
-指数退避 + jitter、SSE 重连循环（`sse.cpp` 的 FrameParser 已就绪，
-`event listen` 轮接线）。业务命令的写请求已在应用层携带确定性
+bounded retry（`event listen` 已具备退避重连 + Last-Event-ID 续传；
+其余命令为单次调用）。业务命令的写请求已在应用层携带确定性
 Idempotency-Key（msg send）。
 
 401 处理顺序（已实装，`withLazyRefresh`）：

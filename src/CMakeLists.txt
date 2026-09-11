@@ -8,6 +8,7 @@ add_library(astral_core STATIC
   client/http_client.cpp
   client/sse.cpp
   commands/doctor_cmd.cpp
+  commands/event_cmd.cpp
   commands/init_cmd.cpp
   commands/login_cmd.cpp
   commands/msg_cmd.cpp
@@ -19,6 +20,7 @@ add_library(astral_core STATIC
   core/error.cpp
   core/log.cpp
   core/version.cpp
+  events/listen.cpp
   output/json_output.cpp
   output/render.cpp
   output/style.cpp
