@@ -75,3 +75,5 @@ TEST_CASE("doctor --json emits a check array") {
         REQUIRE(check.contains("status"));
     }
 }
+
+} // namespace
