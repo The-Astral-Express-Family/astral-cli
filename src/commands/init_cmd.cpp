@@ -111,7 +111,7 @@ public:
                                         "workspace creation returned status " +
                                             std::to_string(created.status));
             }
-            workspace = nlohmann::json::parse(created.body).at("workspace");
+            workspace = nlohmann::json::parse(created.body); // flat Workspace (openapi)
         }
 
         // 3. Verify the binding target is visible to this principal (§10.9:
@@ -129,7 +129,7 @@ public:
                                     "workspace verification returned status " +
                                         std::to_string(verified.status));
         }
-        workspace = nlohmann::json::parse(verified.body).at("workspace");
+        workspace = nlohmann::json::parse(verified.body); // flat Workspace (openapi)
 
         // 4. Respect an existing binding; replace only with --rebind.
         const std::string dir = path_.empty() ? "." : path_;
