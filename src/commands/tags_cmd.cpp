@@ -11,6 +11,7 @@
 #include "commands/command.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
+#include "output/render.hpp"
 #include "output/style.hpp"
 
 namespace astral::commands {
@@ -19,17 +20,8 @@ namespace {
 
 using nlohmann::json;
 using output::Painter;
-
-std::string scalarOr(const json& object, const char* key, const std::string& fallback = "") {
-    const auto it = object.find(key);
-    if (it == object.end() || it->is_null()) {
-        return fallback;
-    }
-    if (it->is_string()) {
-        return it->get<std::string>();
-    }
-    return it->dump();
-}
+using output::printPageJson;
+using output::scalarOr;
 
 // Resolves a `<name-or-id>` argument to (id, canonical name). `tag_`-prefixed
 // arguments are taken as ids verbatim; otherwise the workspace tag dictionary
@@ -78,23 +70,15 @@ json propose(const auth::ApiSession& api, const auth::WorkspaceContext& ws,
     if (!targetTagId.empty()) {
         body["target_tag_id"] = targetTagId;
     }
-    client::HttpRequest request;
-    request.method = "POST";
-    request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/tag-proposals");
-    request.body = body.dump();
-    request.headers.emplace_back("Content-Type", "application/json");
-    return json::parse(api.requireSuccess(std::move(request), "tag proposal").body);
+    return auth::sendJson(api, "POST", "/workspaces/" + ws.workspaceId + "/tag-proposals", body,
+                          "tag proposal");
 }
 
 // Second step: code + name are bound to the proposal (and its actor) server-side.
 json confirm(const auth::ApiSession& api, const std::string& proposalId, const std::string& code,
              const std::string& name) {
-    client::HttpRequest request;
-    request.method = "POST";
-    request.url = auth::apiUrl(api, "/tag-proposals/" + proposalId + "/confirm");
-    request.body = json{{"confirm_code", code}, {"name", name}}.dump();
-    request.headers.emplace_back("Content-Type", "application/json");
-    return json::parse(api.requireSuccess(std::move(request), "tag confirm").body);
+    return auth::sendJson(api, "POST", "/tag-proposals/" + proposalId + "/confirm",
+                          json{{"confirm_code", code}, {"name", name}}, "tag confirm");
 }
 
 void printProposalHints(std::ostream& out, const std::string& verb, const json& proposal) {
@@ -169,11 +153,7 @@ private:
         const json items = auth::fetchPageItems(api, "/workspaces/" + ws.workspaceId + "/tags", "",
                                                 false, "tag list", nextCursor);
         if (context.json) {
-            output::printJson(
-                context.out,
-                {{"workspace_id", ws.workspaceId},
-                 {"items", items},
-                 {"next_cursor", nextCursor.empty() ? json(nullptr) : json(nextCursor)}});
+            printPageJson(context.out, ws.workspaceId, items, nextCursor);
             return 0;
         }
         if (items.empty()) {
@@ -184,6 +164,8 @@ private:
         for (const auto& tag : items) {
             context.out << padId(tag) << "  " << paint.key(scalarOr(tag, "name")) << '\n';
         }
+        // 注：服务端 tag 词典目前不分页（next_cursor 恒空）；若服务端引入分页，
+        // 此处需同步加 --limit/--all 与截断尾注（对齐 todo/msg list）。
         return 0;
     }
 

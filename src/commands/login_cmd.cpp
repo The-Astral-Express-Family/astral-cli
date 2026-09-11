@@ -5,6 +5,7 @@
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
 
+#include "auth/api.hpp"
 #include "auth/device_flow.hpp"
 #include "auth/session.hpp"
 #include "commands/command.hpp"
@@ -99,7 +100,9 @@ public:
             request.method = "POST";
             request.url = auth::ServerInfo{session->serverUrl, "", session->apiBase}.origin() +
                           session->apiBase + "/auth/logout";
-            request.body = "{\"refresh_token\":\"" + session->refreshToken + "\"}";
+            // nlohmann 序列化：refresh token 走 base64url，但构造不再依赖
+            // token 字符集假设（手拼 JSON 对引号/反斜杠不安全）。
+            request.body = nlohmann::json{{"refresh_token", session->refreshToken}}.dump();
             (void)http(request);
         } catch (const core::AstralError& error) {
             context.err << "warning: server-side logout failed (" << error.what()
@@ -137,15 +140,9 @@ public:
         platform::LoginSession session = auth::requireSession(*store, baseUrl);
 
         const auth::ServerInfo server = auth::discoverServer(baseUrl, auth::realHttp());
-        const auth::HttpFn http = auth::realHttp();
+        // Session-only identity probe (never ASTRAL_TOKEN), one lazy refresh.
         const std::string meUrl = server.origin() + server.apiBase + "/auth/me";
-        const auto call = [&http, &meUrl](const platform::LoginSession& s) {
-            client::HttpRequest request;
-            request.url = meUrl;
-            request.bearerToken = s.accessToken;
-            return http(request);
-        };
-        const client::HttpResponse response = auth::withLazyRefresh(*store, http, session, call);
+        const client::HttpResponse response = auth::sessionGet(*store, session, meUrl);
         if (response.status == 404) {
             throw core::AstralError(core::Errc::ServerNotFound,
                                     "no astral API at " + server.origin() + server.apiBase);

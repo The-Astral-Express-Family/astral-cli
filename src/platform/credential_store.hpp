@@ -56,9 +56,10 @@ public:
     virtual std::vector<ServerId> listSessions() const = 0;
 };
 
-// JSON 文件实现。格式（按 server_id 为主键，一文件多服务器）：
-//   {"version": 1, "servers": {"srv_...": {"principal_id": "", "access_token":
-//   "", "refresh_token": ""}}}
+// JSON 文件实现（D12 分槽，version 2）：human 会话按 canonical server URL
+//   键存 "sessions" 槽；agent credential 按 server_id 键存 "servers" 槽
+//   （{"principal_id", "access_token", "refresh_token"}）。servers 槽的生产
+//   消费方（agent credential 文件化）尚未接线，ASTRAL_TOKEN 环境变量优先。
 // 读写均原子（temp + rename），POSIX 上文件权限 0600。损坏文件时 load
 // 报 CREDENTIAL_STORE_ERROR 并提示重新登录；save/erase 按空文件重建，
 // 因此 `astral login` 可以直接修复损坏的凭证文件。

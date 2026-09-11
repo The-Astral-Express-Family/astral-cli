@@ -6,8 +6,9 @@
 同时服务 Human 与 Agent 两类调用者：默认输出面向人，`--json` 提供稳定的机器契约。
 
 > 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
-> auth 登录链路（device flow / whoami / logout / init 绑定）与 `astral todo`
-> 任务命令族已接通协议快照 v1；tags/msg/SSE 随后续轮次落地。
+> 已接通**协议快照 v2**（容器化任务树）：auth 链路（device flow / whoami /
+> logout / init 绑定）、`astral todo` / `astral tags` / `astral msg` 均已可用；
+> `astral event`（SSE 流式消费）为下一轮。
 
 ## 功能速览
 
@@ -111,7 +112,7 @@ src/
 ├─ app/        # main、CLI11 接线、全局选项、错误→退出码映射
 ├─ commands/   # 每个顶层名词一个模块；Command 基类 + registry
 ├─ client/     # HTTP（libcurl 封装）与 SSE 帧解析
-├─ auth/       # token 解析策略（ASTRAL_TOKEN 优先于凭证文件）
+├─ auth/       # ApiSession（业务命令鉴权底座，ASTRAL_TOKEN 优先）、设备码流程、会话
 ├─ workspace/  # .astral/config.json 绑定、init 简写解析、目标解析优先级
 ├─ output/     # Human/JSON 双输出、颜色、TTY 检测
 ├─ platform/   # OS 差异集中地：~/.astral-cli 用户目录、凭证文件存储、浏览器唤起

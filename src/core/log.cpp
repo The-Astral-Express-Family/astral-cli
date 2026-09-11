@@ -29,8 +29,4 @@ void configureLogging(const std::string& level, bool color) {
     spdlog::flush_on(spdlog::level::err);
 }
 
-spdlog::logger& logger() {
-    return *spdlog::default_logger_raw();
-}
-
 } // namespace astral::core

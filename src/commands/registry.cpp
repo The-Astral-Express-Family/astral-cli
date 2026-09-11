@@ -38,10 +38,10 @@ public:
 
     int execute(const CommandContext& context) override {
         (void)context;
-        throw core::AstralError(core::Errc::CommandNotImplemented,
-                                std::string("'astral ") + name_ +
-                                    " ...' is not implemented yet (watch the login/init round in "
-                                    "the modulator repo TODO)");
+        throw core::AstralError(
+            core::Errc::CommandNotImplemented,
+            std::string("'astral ") + name_ +
+                " ...' is not implemented yet (see docs/ARCHITECTURE.md for the roadmap)");
     }
 
 private:

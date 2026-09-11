@@ -36,8 +36,6 @@ using astral_test::runApp;
 using astral_test::RunResult;
 using astral_test::uniqueHome;
 
-const std::string kWellKnown = astral_test::ApiFixture::wellKnown().dump();
-
 const json kTaskOne = json{
     {"id", "task_1"},
     {"workspace_id", "ws_1"},
@@ -396,4 +394,25 @@ TEST_CASE("todo without any resolvable target is a local workspace error") {
     REQUIRE(payload.at("error").at("code") == "LOCAL_WORKSPACE_ERROR");
 }
 
+TEST_CASE("todo add without any target carries the D14 default-workspace hint") {
+    astral_test::EnvGuard home("ASTRAL_HOME", uniqueHome("astral-test-hint").string());
+    astral_test::EnvGuard noToken("ASTRAL_TOKEN", "");
+    astral_test::EnvGuard noServer("ASTRAL_SERVER", "");
+    const auto workDir = uniqueHome("astral-test-hint-work");
+    std::filesystem::create_directories(workDir);
+    CwdGuard cwd(workDir);
+
+    astral::auth::setCommandTransportForTests(
+        [](const client::HttpRequest&) -> client::HttpResponse {
+            FAIL("no network expected without a resolvable target");
+            return client::HttpResponse{};
+        });
+
+    const RunResult result = runApp({"astral", "todo", "add", "thing"});
+    astral::auth::setCommandTransportForTests(nullptr);
+
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::LocalWorkspace));
+    // Human output (stderr) surfaces the D14 convention hint.
+    REQUIRE(result.err.find("default/<your-name>/todo") != std::string::npos);
+}
 } // namespace

@@ -103,6 +103,52 @@ std::string apiUrl(const ApiSession& api, const std::string& path) {
     return api.server().origin() + api.server().apiBase + path;
 }
 
+nlohmann::json getJson(const ApiSession& api, const std::string& path, const std::string& what) {
+    client::HttpRequest request;
+    request.url = apiUrl(api, path);
+    return json::parse(api.requireSuccess(std::move(request), what).body);
+}
+
+nlohmann::json sendJson(const ApiSession& api, std::string method, const std::string& path,
+                        const nlohmann::json& body, const std::string& what,
+                        std::vector<std::pair<std::string, std::string>> extraHeaders) {
+    client::HttpRequest request;
+    request.method = std::move(method);
+    request.url = apiUrl(api, path);
+    request.body = body.dump();
+    request.headers.emplace_back("Content-Type", "application/json");
+    for (auto& [name, value] : extraHeaders) {
+        request.headers.emplace_back(std::move(name), std::move(value));
+    }
+    return json::parse(api.requireSuccess(std::move(request), what).body);
+}
+
+client::HttpResponse sessionGet(platform::CredentialStore& store, platform::LoginSession& session,
+                                const std::string& url) {
+    const HttpFn http = realHttp();
+    const auto call = [&http, &url](const platform::LoginSession& s) {
+        client::HttpRequest request;
+        request.url = url;
+        request.bearerToken = s.accessToken;
+        return http(request);
+    };
+    return withLazyRefresh(store, http, session, call);
+}
+
+client::HttpResponse sessionPost(platform::CredentialStore& store, platform::LoginSession& session,
+                                 const std::string& url, const std::string& jsonBody) {
+    const HttpFn http = realHttp();
+    const auto call = [&http, &url, &jsonBody](const platform::LoginSession& s) {
+        client::HttpRequest request;
+        request.method = "POST";
+        request.url = url;
+        request.bearerToken = s.accessToken;
+        request.body = jsonBody;
+        return http(request);
+    };
+    return withLazyRefresh(store, http, session, call);
+}
+
 void throwApiError(const client::HttpResponse& response, const std::string& what) {
     std::string protocolCode;
     std::string detail;

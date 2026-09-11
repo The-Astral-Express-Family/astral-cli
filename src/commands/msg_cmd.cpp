@@ -14,6 +14,7 @@
 #include "commands/command.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
+#include "output/render.hpp"
 #include "output/style.hpp"
 
 namespace astral::commands {
@@ -22,40 +23,10 @@ namespace {
 
 using nlohmann::json;
 using output::Painter;
-
-std::string scalarOr(const json& object, const char* key, const std::string& fallback = "") {
-    const auto it = object.find(key);
-    if (it == object.end() || it->is_null()) {
-        return fallback;
-    }
-    if (it->is_string()) {
-        return it->get<std::string>();
-    }
-    return it->dump();
-}
-
-// Cuts at a codepoint boundary so CJK bodies never get mojibake'd.
-std::string truncateUtf8(const std::string& text, std::size_t maxCodepoints) {
-    std::size_t codepoints = 0;
-    std::size_t offset = 0;
-    while (offset < text.size()) {
-        if (codepoints == maxCodepoints) {
-            return text.substr(0, offset) + "...";
-        }
-        const unsigned char lead = static_cast<unsigned char>(text[offset]);
-        std::size_t len = 1;
-        if ((lead & 0xE0) == 0xC0) {
-            len = 2;
-        } else if ((lead & 0xF0) == 0xE0) {
-            len = 3;
-        } else if ((lead & 0xF8) == 0xF0) {
-            len = 4;
-        }
-        offset += len;
-        ++codepoints;
-    }
-    return text;
-}
+using output::printMoreHint;
+using output::printPageJson;
+using output::scalarOr;
+using output::truncateUtf8;
 
 // Target grammar (ARCHITECTURE.md section 11): `workspace` broadcasts to the
 // bound workspace; `actor:<actor_id>` is a direct message; `task:<task_id>`
@@ -148,18 +119,12 @@ private:
             body["thread_id"] = thread_;
         }
 
-        client::HttpRequest request;
-        request.method = "POST";
-        request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/messages");
-        request.body = body.dump();
-        request.headers.emplace_back("Content-Type", "application/json");
         // 重试不得双发：send 携带确定性 Idempotency-Key（同 actor+endpoint+key
         // 24h 内服务端重放首次 2xx），内容相同 → key 相同。
-        request.headers.emplace_back(
-            "Idempotency-Key",
-            "msg-" + fnv1aHex(target.type + "|" + target.id + "|" + thread_ + "|" + body_));
-        const json message =
-            json::parse(api.requireSuccess(std::move(request), "message send").body);
+        const json message = auth::sendJson(
+            api, "POST", "/workspaces/" + ws.workspaceId + "/messages", body, "message send",
+            {{"Idempotency-Key",
+              "msg-" + fnv1aHex(target.type + "|" + target.id + "|" + thread_ + "|" + body_)}});
 
         if (context.json) {
             output::printJson(context.out, message); // Message verbatim
@@ -201,11 +166,7 @@ private:
             auth::fetchPageItems(api, path, std::move(query), all_, "message list", nextCursor);
 
         if (context.json) {
-            output::printJson(
-                context.out,
-                {{"workspace_id", ws.workspaceId},
-                 {"items", items},
-                 {"next_cursor", nextCursor.empty() ? json(nullptr) : json(nextCursor)}});
+            printPageJson(context.out, ws.workspaceId, items, nextCursor);
             return 0;
         }
         if (items.empty()) {
@@ -218,7 +179,7 @@ private:
                         << truncateUtf8(scalarOr(message, "body"), 64) << '\n';
         }
         if (!nextCursor.empty()) {
-            context.out << "(" << items.size() << " shown; more available - pass --all)\n";
+            printMoreHint(context.out, items.size(), "--all");
         }
         return 0;
     }

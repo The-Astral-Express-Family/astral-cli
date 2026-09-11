@@ -234,26 +234,4 @@ TEST_CASE("msg list selects the container by flag") {
     }
 }
 
-TEST_CASE("todo add without any target carries the D14 default-workspace hint") {
-    astral_test::EnvGuard home("ASTRAL_HOME", astral_test::uniqueHome("astral-test-hint").string());
-    astral_test::EnvGuard noToken("ASTRAL_TOKEN", "");
-    astral_test::EnvGuard noServer("ASTRAL_SERVER", "");
-    const auto workDir = astral_test::uniqueHome("astral-test-hint-work");
-    std::filesystem::create_directories(workDir);
-    astral_test::CwdGuard cwd(workDir);
-
-    astral::auth::setCommandTransportForTests(
-        [](const client::HttpRequest&) -> client::HttpResponse {
-            FAIL("no network expected without a resolvable target");
-            return client::HttpResponse{};
-        });
-
-    const RunResult result = runApp({"astral", "todo", "add", "thing"});
-    astral::auth::setCommandTransportForTests(nullptr);
-
-    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::LocalWorkspace));
-    // Human output (stderr) surfaces the D14 convention hint.
-    REQUIRE(result.err.find("default/<your-name>/todo") != std::string::npos);
-}
-
 } // namespace

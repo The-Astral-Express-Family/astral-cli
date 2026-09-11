@@ -35,18 +35,11 @@ void printFailure(const commands::CommandContext& context, const core::AstralErr
         // ARCHITECTURE.md section 12: protocol failures surface the server's
         // stable error.code plus request_id/retryable so agents branch on the
         // frozen contract; CLI-local failures keep CLI-local codes only.
-        nlohmann::json body{
-            {"code",
-             error.protocolCode() ? *error.protocolCode() : std::string(error.codeString())},
-            {"message", std::string(error.what())},
-        };
-        if (error.requestId()) {
-            body["request_id"] = *error.requestId();
-        }
-        if (error.retryable()) {
-            body["retryable"] = *error.retryable();
-        }
-        output::printJson(context.out, {{"error", std::move(body)}});
+        output::printJson(context.out, output::errorEnvelope(error.protocolCode()
+                                                                 ? *error.protocolCode()
+                                                                 : std::string(error.codeString()),
+                                                             std::string(error.what()),
+                                                             error.requestId(), error.retryable()));
         return;
     }
     const output::Painter paint(context.color);

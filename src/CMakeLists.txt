@@ -5,7 +5,6 @@ add_library(astral_core STATIC
   auth/api.cpp
   auth/device_flow.cpp
   auth/session.cpp
-  auth/token_provider.cpp
   client/http_client.cpp
   client/sse.cpp
   commands/doctor_cmd.cpp
@@ -21,6 +20,7 @@ add_library(astral_core STATIC
   core/log.cpp
   core/version.cpp
   output/json_output.cpp
+  output/render.cpp
   output/style.cpp
   output/tty.cpp
   platform/atomic_file.cpp

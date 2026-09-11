@@ -88,8 +88,8 @@ public:
             context.out << marker << paint.key(check.name) << "  " << check.detail << "\n";
         }
         context.out << "\n"
-                    << paint.dim("network: not checked (server probes land with the login/init "
-                                 "round; HTTP client is ready)")
+                    << paint.dim("network: server probes run only when a target is known "
+                                 "(--server/ASTRAL_SERVER or a workspace binding)")
                     << "\n";
         return 0;
     }

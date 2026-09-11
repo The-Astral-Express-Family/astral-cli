@@ -5,6 +5,7 @@
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
 
+#include "auth/api.hpp"
 #include "auth/session.hpp"
 #include "commands/command.hpp"
 #include "commands/init_cmd.hpp"
@@ -55,36 +56,14 @@ public:
         platform::LoginSession session = auth::requireSession(*store, server.baseUrl);
         const std::string api = server.origin() + server.apiBase;
 
-        // 2. Resolve the workspace by exact name; every authenticated call
-        // goes through the lazy-refresh wrapper (D13: access tokens live
-        // 5-15 minutes, rotation is transparent to this flow).
+        // 2. Resolve the workspace by exact name. Every authenticated call
+        // rides sessionGet/sessionPost: the human session slot only (never
+        // ASTRAL_TOKEN), with one lazy refresh per call (D13: access tokens
+        // live 5-15 minutes, rotation is transparent to this flow).
         const std::string workspaceName = *spec.workspaceName;
-        const auth::HttpFn http = auth::realHttp();
-        // Every authenticated call goes through the lazy-refresh wrapper
-        // (D13: access tokens live 5-15 minutes; rotation is transparent).
-        const auto authedGet = [&](const std::string& url) -> client::HttpResponse {
-            const auto call = [&http, &url](const platform::LoginSession& s) {
-                client::HttpRequest request;
-                request.url = url;
-                request.bearerToken = s.accessToken;
-                return http(request);
-            };
-            return auth::withLazyRefresh(*store, http, session, call);
-        };
-        const auto authedPost = [&](const std::string& url,
-                                    const std::string& body) -> client::HttpResponse {
-            const auto call = [&http, &url, &body](const platform::LoginSession& s) {
-                client::HttpRequest request;
-                request.method = "POST";
-                request.url = url;
-                request.bearerToken = s.accessToken;
-                request.body = body;
-                return http(request);
-            };
-            return auth::withLazyRefresh(*store, http, session, call);
-        };
 
-        const client::HttpResponse lookup = authedGet(api + "/workspaces?name=" + workspaceName);
+        const client::HttpResponse lookup = auth::sessionGet(
+            *store, session, api + "/workspaces?name=" + client::urlEncode(workspaceName));
         if (lookup.status != 200) {
             throw core::AstralError(core::Errc::ProtocolIncompatible,
                                     "workspace lookup returned status " +
@@ -101,7 +80,8 @@ public:
                                         "' not found on the server (pass --create to make it)");
         } else {
             const client::HttpResponse created =
-                authedPost(api + "/workspaces", nlohmann::json{{"name", workspaceName}}.dump());
+                auth::sessionPost(*store, session, api + "/workspaces",
+                                  nlohmann::json{{"name", workspaceName}}.dump());
             if (created.status == 409) {
                 throw core::AstralError(core::Errc::WorkspaceAlreadyBound,
                                         "workspace name '" + workspaceName + "' is already taken");
@@ -118,7 +98,7 @@ public:
         // GET /workspaces/{id}; non-member -> 404).
         const std::string workspaceUrl =
             api + "/workspaces/" + workspace.value("id", std::string());
-        const client::HttpResponse verified = authedGet(workspaceUrl);
+        const client::HttpResponse verified = auth::sessionGet(*store, session, workspaceUrl);
         if (verified.status == 404) {
             throw core::AstralError(core::Errc::WorkspaceNotFound,
                                     "workspace '" + workspace.value("name", *spec.workspaceName) +

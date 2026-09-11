@@ -5,22 +5,21 @@
 
 namespace astral::workspace {
 
-// Parses the `astral init <server_url>[/<workspace_name>]` shorthand
-// (ARCHITECTURE.md section 9.1). Discovery is attempted against the full URL
-// first; only if that fails is the last path segment split off as a
-// workspace-name candidate. This type carries both candidates without doing
-// any networking.
+// Parses the `astral init <server-url>/<workspace-name>` shorthand
+// (ARCHITECTURE.md section 9.1): the last path segment becomes the workspace
+// candidate unless --workspace is given. No networking, no fallback discovery
+// against the full URL — init requires a workspace name and refuses to guess.
 struct TargetSpec {
-    // The input interpreted as a pure server URL (also what discovery tries
-    // first).
+    // The input interpreted as a pure server URL (normalized).
     std::string fullUrl;
 
-    // The input with its last path segment removed; nullopt when there is
-    // nothing to split (no path segments beyond "/").
+    // The server URL with the workspace segment removed (nullopt when the
+    // input had no split point). informational; init only consumes fullUrl +
+    // workspaceName.
     std::optional<std::string> urlAfterSplit;
 
-    // The split-off segment, valid only when urlAfterSplit is set or when an
-    // explicit --workspace was given.
+    // The split-off segment, present only when urlAfterSplit is set or when
+    // an explicit --workspace was given.
     std::optional<std::string> workspaceName;
 };
 

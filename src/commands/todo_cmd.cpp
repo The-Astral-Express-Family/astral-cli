@@ -14,6 +14,7 @@
 #include "commands/command.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
+#include "output/render.hpp"
 #include "output/style.hpp"
 
 namespace astral::commands {
@@ -22,47 +23,17 @@ namespace {
 
 using nlohmann::json;
 using output::Painter;
+using output::printMoreHint;
+using output::printPageJson;
+using output::scalarOr;
+using output::truncateUtf8;
 
 const char* const kTaskStatuses[] = {"open",   "in_progress", "blocked",
                                      "review", "done",        "cancelled"};
 const char* const kTaskPriorities[] = {"low", "normal", "high", "urgent"};
 
-// Cuts at a codepoint boundary so CJK titles never get mojibake'd.
-std::string truncateUtf8(const std::string& text, std::size_t maxCodepoints) {
-    std::size_t codepoints = 0;
-    std::size_t offset = 0;
-    while (offset < text.size()) {
-        if (codepoints == maxCodepoints) {
-            return text.substr(0, offset) + "...";
-        }
-        const unsigned char lead = static_cast<unsigned char>(text[offset]);
-        std::size_t len = 1;
-        if ((lead & 0xE0) == 0xC0) {
-            len = 2;
-        } else if ((lead & 0xF0) == 0xE0) {
-            len = 3;
-        } else if ((lead & 0xF8) == 0xF0) {
-            len = 4;
-        }
-        offset += len;
-        ++codepoints;
-    }
-    return text;
-}
-
 std::string padRight(const std::string& text, std::size_t width) {
     return text.size() >= width ? text : text + std::string(width - text.size(), ' ');
-}
-
-std::string scalarOr(const json& object, const char* key, const std::string& fallback = "") {
-    const auto it = object.find(key);
-    if (it == object.end() || it->is_null()) {
-        return fallback;
-    }
-    if (it->is_string()) {
-        return it->get<std::string>();
-    }
-    return it->dump();
 }
 
 void appendParam(std::string& query, const std::string& key, const std::string& value) {
@@ -278,14 +249,6 @@ public:
     }
 
 private:
-    // One session per command run: discovery happens exactly once and the
-    // (possibly refreshed) session state stays warm for follow-up requests.
-    // Unresolvable targets get the D14 default-workspace hint from openWorkspace.
-    std::pair<auth::ApiSession, auth::WorkspaceContext>
-    openContext(const CommandContext& context) const {
-        return auth::openWorkspace(context.server, context.workspace);
-    }
-
     // claim/done need the server's current revision for optimistic
     // concurrency; --revision pins it and skips the extra GET.
     std::int64_t expectedRevision(const auth::ApiSession& api) const {
@@ -293,14 +256,13 @@ private:
     }
 
     std::int64_t currentRevision(const auth::ApiSession& api, const std::string& taskId) const {
-        client::HttpRequest request;
-        request.url = auth::apiUrl(api, "/tasks/" + taskId);
-        return json::parse(api.requireSuccess(std::move(request), "task lookup").body)
-            .value("revision", 0);
+        return auth::getJson(api, "/tasks/" + taskId, "task lookup").value("revision", 0);
     }
 
     int runList(const CommandContext& context) {
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         // v2 容器集合：--parent 切到 task 容器，否则 workspace 容器（根层）。
         const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
@@ -313,11 +275,7 @@ private:
                                                 "task list", nextCursor);
 
         if (context.json) {
-            output::printJson(
-                context.out,
-                {{"workspace_id", ws.workspaceId},
-                 {"items", items},
-                 {"next_cursor", nextCursor.empty() ? json(nullptr) : json(nextCursor)}});
+            printPageJson(context.out, ws.workspaceId, items, nextCursor);
             return 0;
         }
         if (items.empty()) {
@@ -326,8 +284,7 @@ private:
         }
         printTaskTable(context.out, items, /*withScore=*/false);
         if (!nextCursor.empty()) {
-            context.out << "(" << items.size()
-                        << " shown; more available - pass --all or raise --limit)\n";
+            printMoreHint(context.out, items.size(), "--all or raise --limit");
         }
         return 0;
     }
@@ -340,7 +297,9 @@ private:
                 core::Errc::Usage,
                 "todo search needs at least one of --regex/--fuzzy/--tag/--status/--assignee");
         }
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         // Semantics are fixed server-side (architecture section 13):
         // permission -> structured -> regex filter -> fuzzy rank -> paging.
@@ -355,11 +314,7 @@ private:
                                  std::move(query), pageFlags_.all, "task search", nextCursor);
 
         if (context.json) {
-            output::printJson(
-                context.out,
-                {{"workspace_id", ws.workspaceId},
-                 {"items", items},
-                 {"next_cursor", nextCursor.empty() ? json(nullptr) : json(nextCursor)}});
+            printPageJson(context.out, ws.workspaceId, items, nextCursor);
             return 0;
         }
         if (items.empty()) {
@@ -371,7 +326,9 @@ private:
     }
 
     int runAdd(const CommandContext& context) {
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         // v2：创建即投递进容器——无 --parent 落 workspace 根层集合，
         // 有 --parent 投递进该 task 的 children 集合（body 无 parent_id 字段）。
@@ -389,12 +346,7 @@ private:
 
         const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
                                                  : "/tasks/" + parent_ + "/children";
-        client::HttpRequest request;
-        request.method = "POST";
-        request.url = auth::apiUrl(api, path);
-        request.body = body.dump();
-        request.headers.emplace_back("Content-Type", "application/json");
-        const json task = json::parse(api.requireSuccess(std::move(request), "task create").body);
+        const json task = auth::sendJson(api, "POST", path, body, "task create");
 
         if (context.json) {
             output::printJson(context.out, task);
@@ -405,11 +357,11 @@ private:
     }
 
     int runShow(const CommandContext& context) {
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        client::HttpRequest request;
-        request.url = auth::apiUrl(api, "/tasks/" + taskId_);
-        const json task = json::parse(api.requireSuccess(std::move(request), "task show").body);
+        const json task = auth::getJson(api, "/tasks/" + taskId_, "task show");
 
         if (context.json) {
             output::printJson(context.out, task);
@@ -420,17 +372,14 @@ private:
     }
 
     int runClaim(const CommandContext& context) {
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        json body{{"expected_revision", expectedRevision(api)},
-                  {"lease_seconds", leaseSeconds_.value_or(300)}};
-
-        client::HttpRequest request;
-        request.method = "POST";
-        request.url = auth::apiUrl(api, "/tasks/" + taskId_ + "/claim");
-        request.body = body.dump();
-        request.headers.emplace_back("Content-Type", "application/json");
-        const json result = json::parse(api.requireSuccess(std::move(request), "task claim").body);
+        const json body{{"expected_revision", expectedRevision(api)},
+                        {"lease_seconds", leaseSeconds_.value_or(300)}};
+        const json result =
+            auth::sendJson(api, "POST", "/tasks/" + taskId_ + "/claim", body, "task claim");
 
         if (context.json) {
             output::printJson(context.out, result); // ClaimResult {task, lease} verbatim
@@ -443,16 +392,12 @@ private:
     }
 
     int runDone(const CommandContext& context) {
-        auto [api, ws] = openContext(context);
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
-
-        client::HttpRequest request;
-        request.method = "PATCH";
-        request.url = auth::apiUrl(api, "/tasks/" + taskId_);
-        request.body = body.dump();
-        request.headers.emplace_back("Content-Type", "application/json");
-        const json task = json::parse(api.requireSuccess(std::move(request), "task update").body);
+        const json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
+        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
 
         if (context.json) {
             output::printJson(context.out, task);

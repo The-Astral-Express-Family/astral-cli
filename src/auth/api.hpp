@@ -54,6 +54,25 @@ private:
 // origin + apiBase + path (path starts with '/').
 std::string apiUrl(const ApiSession& api, const std::string& path);
 
+// GET shorthand: requireSuccess + JSON parse of the body.
+nlohmann::json getJson(const ApiSession& api, const std::string& path, const std::string& what);
+
+// JSON-body request shorthand (POST/PATCH/...): method, Content-Type and
+// serialized body are assembled here, then requireSuccess + JSON parse.
+// `extraHeaders` carries per-request protocol headers (Idempotency-Key).
+nlohmann::json sendJson(const ApiSession& api, std::string method, const std::string& path,
+                        const nlohmann::json& body, const std::string& what,
+                        std::vector<std::pair<std::string, std::string>> extraHeaders = {});
+
+// Session-authenticated GET/POST for the human-only commands (whoami, init):
+// unlike ApiSession these deliberately never honor ASTRAL_TOKEN — binding a
+// workspace or asking "who am I" must act as the logged-in human, not an
+// ambient agent credential. One lazy refresh per call (D13).
+client::HttpResponse sessionGet(platform::CredentialStore& store, platform::LoginSession& session,
+                                const std::string& url);
+client::HttpResponse sessionPost(platform::CredentialStore& store, platform::LoginSession& session,
+                                 const std::string& url, const std::string& jsonBody);
+
 // Fully resolves a workspace for a command: local target first, then an
 // exact-name lookup over the API when only a name is known (flag/env path).
 // Missing or invisible workspaces throw WORKSPACE_NOT_FOUND.

@@ -11,8 +11,6 @@ class Painter {
 public:
     explicit Painter(bool colorEnabled) : color_(colorEnabled) {}
 
-    bool enabled() const { return color_; }
-
     std::string ok(std::string_view text) const;
     std::string warn(std::string_view text) const;
     std::string err(std::string_view text) const;

@@ -13,7 +13,7 @@ using OnUserCodeFn =
 // Runs the RFC 8628 device-code flow against `serverUrl` and returns a
 // complete human session (modulator TODO §11 D12).
 //
-// Flow (protocol snapshot v1, A1):
+// Flow (protocol snapshot v2, A1):
 //   GET  {origin}/.well-known/astral                      -> server_id/api_base
 //   POST {api}/auth/device/authorizations                 -> 201 codes
 //   (onUserCode)                                          -> human approves
