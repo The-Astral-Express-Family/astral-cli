@@ -12,6 +12,7 @@
 
 #include "auth/api.hpp"
 #include "commands/command.hpp"
+#include "commands/paging.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
@@ -36,39 +37,26 @@ std::string padRight(const std::string& text, std::size_t width) {
     return text.size() >= width ? text : text + std::string(width - text.size(), ' ');
 }
 
-void appendParam(std::string& query, const std::string& key, const std::string& value) {
-    if (value.empty()) {
-        return;
-    }
-    if (!query.empty()) {
-        query += '&';
-    }
-    query += key + '=' + client::urlEncode(value);
-}
-
-// Shared read flags of list and search (--limit/--all/--status).
-struct PageFlags {
-    std::optional<int> limit;
-    bool all = false;
+// Task list/search read flags: shared paging (--limit/--all) + the
+// task-specific status filter.
+struct TaskPageFlags {
+    PageFlags paging;
     std::string status;
 };
 
-void addPageFlags(CLI::App& app, PageFlags& flags) {
-    app.add_option("--limit", flags.limit, "Page size (server max 200)");
-    app.add_flag("--all", flags.all, "Follow next_cursor until exhausted");
+void addPageFlags(CLI::App& app, TaskPageFlags& flags) {
+    addPageFlags(app, flags.paging);
     app.add_option("--status", flags.status, "Filter by task status")
         ->check(CLI::IsMember(
             std::vector<std::string>{std::begin(kTaskStatuses), std::end(kTaskStatuses)}));
 }
 
-std::string pageQuery(const PageFlags& flags) {
+std::string pageQuery(const TaskPageFlags& flags) {
     std::string query;
     if (!flags.status.empty()) {
         appendParam(query, "status", flags.status);
     }
-    if (flags.limit) {
-        appendParam(query, "limit", std::to_string(*flags.limit));
-    }
+    addPageParams(query, flags.paging);
     return query;
 }
 
@@ -271,7 +259,7 @@ private:
         appendParam(query, "tag", tag_);
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
-        const json items = auth::fetchPageItems(api, path, std::move(query), pageFlags_.all,
+        const json items = auth::fetchPageItems(api, path, std::move(query), pageFlags_.paging.all,
                                                 "task list", nextCursor);
 
         if (context.json) {
@@ -311,7 +299,7 @@ private:
         std::string nextCursor;
         const json items =
             auth::fetchPageItems(api, "/workspaces/" + ws.workspaceId + "/task-search",
-                                 std::move(query), pageFlags_.all, "task search", nextCursor);
+                                 std::move(query), pageFlags_.paging.all, "task search", nextCursor);
 
         if (context.json) {
             printPageJson(context.out, ws.workspaceId, items, nextCursor);
@@ -416,7 +404,7 @@ private:
     CLI::App* doneSub_ = nullptr;
     CLI::App* searchSub_ = nullptr;
 
-    PageFlags pageFlags_;
+    TaskPageFlags pageFlags_;
     std::string assignee_;
     std::string parent_;
     std::string title_;

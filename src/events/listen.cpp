@@ -90,7 +90,13 @@ int runListenLoop(const ListenOptions& options, const AttemptFn& attempt, const 
             request.headers.emplace_back("Last-Event-ID", *cursor);
         }
 
+        // Outcome of one connection, decided by exactly one of the branches
+        // below: either reconnectIn is set (sleep backoff, grow, retry) or the
+        // loop returns/throws. The tail does the sleeping for every path.
         client::HttpResponse response;
+        std::optional<std::chrono::milliseconds> reconnectIn;
+        std::string diagnose;
+
         try {
             response = attempt(request, [&](std::string_view chunk) {
                 parser.feed(chunk);
@@ -104,53 +110,50 @@ int runListenLoop(const ListenOptions& options, const AttemptFn& attempt, const 
             });
         } catch (const core::AstralError& error) {
             // Transport-level failure (NETWORK_ERROR/TIMEOUT): transient by
-            // definition, back off and reconnect; everything else is fatal.
+            // definition; everything else is fatal.
             if (error.code() != core::Errc::NetworkError && error.code() != core::Errc::Timeout) {
                 throw;
             }
-            err << "astral: stream interrupted (" << error.what() << "); reconnecting in "
-                << std::chrono::duration_cast<std::chrono::seconds>(backoff).count() << "s\n";
-            sleep(backoff);
-            backoff = growBackoff(backoff, options.maxBackoff);
-            continue;
+            diagnose = "stream interrupted (" + std::string(error.what()) + ")";
+            reconnectIn = backoff;
         }
 
-        if (wantStop) {
-            return 0; // maxEvents reached: clean stop, not a disconnect
-        }
-        if (response.status == 200) {
-            // Server closed a healthy stream (deploy/restart/timeout): resume
-            // from the cursor. A connection that delivered events proved the
-            // path works, so reset the backoff for the next hiccup.
-            if (deliveredThisConnection) {
-                backoff = options.initialBackoff;
+        if (!reconnectIn) {
+            if (wantStop) {
+                return 0; // maxEvents reached: clean stop, not a disconnect
             }
-            err << "astral: stream closed by server; reconnecting in "
-                << std::chrono::duration_cast<std::chrono::seconds>(backoff).count() << "s\n";
-            sleep(backoff);
-            backoff = growBackoff(backoff, options.maxBackoff);
-            continue;
-        }
-        if (response.status == 429 || response.status >= 500) {
-            // Transient server-side condition: honor Retry-After when present.
-            std::chrono::milliseconds wait = backoff;
-            if (const auto retryAfter = response.header("Retry-After")) {
-                const long seconds = std::strtol(retryAfter->c_str(), nullptr, 10);
-                if (seconds > 0) {
-                    wait = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::seconds(seconds));
+            if (response.status == 200) {
+                // Server closed a healthy stream (deploy/restart/timeout): resume
+                // from the cursor. A connection that delivered events proved the
+                // path works, so reset the backoff for the next hiccup.
+                if (deliveredThisConnection) {
+                    backoff = options.initialBackoff;
                 }
+                diagnose = "stream closed by server";
+                reconnectIn = backoff;
+            } else if (response.status == 429 || response.status >= 500) {
+                // Transient server-side condition: honor Retry-After when present.
+                reconnectIn = backoff;
+                if (const auto retryAfter = response.header("Retry-After")) {
+                    const long seconds = std::strtol(retryAfter->c_str(), nullptr, 10);
+                    if (seconds > 0) {
+                        reconnectIn = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::seconds(seconds));
+                    }
+                }
+                diagnose = "event stream unavailable (HTTP " + std::to_string(response.status) + ")";
+            } else {
+                // 401 (after the caller's lazy refresh), 403, 404 and every other
+                // 4xx will not heal by retrying: map through the standard
+                // protocol error path (exit code + envelope passthrough) and stop.
+                auth::throwApiError(response, "event stream");
             }
-            err << "astral: event stream unavailable (HTTP " << response.status << "); retrying in "
-                << std::chrono::duration_cast<std::chrono::seconds>(wait).count() << "s\n";
-            sleep(wait);
-            backoff = growBackoff(backoff, options.maxBackoff);
-            continue;
         }
-        // 401 (after the caller's lazy refresh), 403, 404 and every other 4xx
-        // will not heal by retrying: map through the standard protocol error
-        // path (exit code + envelope passthrough) and stop.
-        auth::throwApiError(response, "event stream");
+
+        err << "astral: " << diagnose << "; reconnecting in "
+            << std::chrono::duration_cast<std::chrono::seconds>(*reconnectIn).count() << "s\n";
+        sleep(*reconnectIn);
+        backoff = growBackoff(backoff, options.maxBackoff);
     }
 }
 

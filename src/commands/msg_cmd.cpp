@@ -12,6 +12,7 @@
 
 #include "auth/api.hpp"
 #include "commands/command.hpp"
+#include "commands/paging.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
@@ -92,8 +93,7 @@ public:
         CLI::App* list = app.add_subcommand("list", "List messages");
         list->add_option("--task", taskFilter_, "List the thread of this task");
         list->add_option("--thread", threadFilter_, "List this thread only");
-        list->add_option("--limit", limit_, "Page size (server max 200)");
-        list->add_flag("--all", all_, "Follow next_cursor until exhausted");
+        addPageFlags(*list, pageFlags_);
 
         sendSub_ = send;
         listSub_ = list;
@@ -143,27 +143,16 @@ private:
         // thread filter.
         std::string path;
         std::string query;
-        auto append = [&query](const std::string& key, const std::string& value) {
-            if (value.empty()) {
-                return;
-            }
-            if (!query.empty()) {
-                query += '&';
-            }
-            query += key + '=' + client::urlEncode(value);
-        };
         if (!taskFilter_.empty()) {
             path = "/tasks/" + taskFilter_ + "/messages";
         } else {
             path = "/workspaces/" + ws.workspaceId + "/messages";
-            append("thread_id", threadFilter_);
+            appendParam(query, "thread_id", threadFilter_);
         }
-        if (limit_) {
-            append("limit", std::to_string(*limit_));
-        }
+        addPageParams(query, pageFlags_);
         std::string nextCursor;
-        const json items =
-            auth::fetchPageItems(api, path, std::move(query), all_, "message list", nextCursor);
+        const json items = auth::fetchPageItems(api, path, std::move(query), pageFlags_.all,
+                                                "message list", nextCursor);
 
         if (context.json) {
             printPageJson(context.out, ws.workspaceId, items, nextCursor);
@@ -193,8 +182,7 @@ private:
     std::string thread_;
     std::string taskFilter_;
     std::string threadFilter_;
-    std::optional<int> limit_;
-    bool all_ = false;
+    PageFlags pageFlags_;
 };
 
 } // namespace

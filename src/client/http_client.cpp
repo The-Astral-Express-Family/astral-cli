@@ -56,6 +56,61 @@ size_t collectHeader(char* data, size_t size, size_t count, void* userData) {
     throw core::AstralError(core::Errc::NetworkError, detail + " (" + url + ")");
 }
 
+// One prepared curl transfer: owns the easy handle and header list, applies
+// the options shared by buffered and streaming requests, and releases both in
+// one place (including on the throw paths).
+class PreparedRequest {
+public:
+    PreparedRequest(const HttpRequest& request, const HttpClient::Options& options,
+                    const char* acceptHeader) {
+        if (request.url.find("://") == std::string::npos) {
+            throw core::AstralError(core::Errc::NetworkError,
+                                    "invalid URL (missing scheme): " + request.url);
+        }
+        handle_ = curl_easy_init();
+        if (handle_ == nullptr) {
+            throw core::AstralError(core::Errc::Internal, "curl_easy_init failed");
+        }
+        headerList_ = curl_slist_append(headerList_, acceptHeader);
+        for (const auto& [key, value] : request.headers) {
+            headerList_ = curl_slist_append(headerList_, (key + ": " + value).c_str());
+        }
+        if (request.bearerToken) {
+            headerList_ = curl_slist_append(
+                headerList_, ("Authorization: Bearer " + *request.bearerToken).c_str());
+        }
+        curl_easy_setopt(handle_, CURLOPT_URL, request.url.c_str());
+        curl_easy_setopt(handle_, CURLOPT_NOPROGRESS, 1L);
+        curl_easy_setopt(handle_, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(handle_, CURLOPT_USERAGENT, options.userAgent.c_str());
+        curl_easy_setopt(handle_, CURLOPT_CONNECTTIMEOUT_MS,
+                         static_cast<long>(options.connectTimeout.count()));
+        curl_easy_setopt(handle_, CURLOPT_SSL_VERIFYPEER, options.verifyTls ? 1L : 0L);
+        curl_easy_setopt(handle_, CURLOPT_SSL_VERIFYHOST, options.verifyTls ? 2L : 0L);
+        if (headerList_ != nullptr) {
+            curl_easy_setopt(handle_, CURLOPT_HTTPHEADER, headerList_);
+        }
+    }
+
+    ~PreparedRequest() {
+        if (headerList_ != nullptr) {
+            curl_slist_free_all(headerList_);
+        }
+        if (handle_ != nullptr) {
+            curl_easy_cleanup(handle_);
+        }
+    }
+
+    PreparedRequest(const PreparedRequest&) = delete;
+    PreparedRequest& operator=(const PreparedRequest&) = delete;
+
+    CURL* handle() { return handle_; }
+
+private:
+    CURL* handle_ = nullptr;
+    struct curl_slist* headerList_ = nullptr;
+};
+
 } // namespace
 
 std::optional<std::string> HttpResponse::header(const std::string& name) const {
@@ -96,44 +151,12 @@ HttpClient::HttpClient(Options options) : options_(std::move(options)) {
 HttpClient::~HttpClient() = default;
 
 HttpResponse HttpClient::send(const HttpRequest& request) {
-    if (request.url.find("://") == std::string::npos) {
-        throw core::AstralError(core::Errc::NetworkError,
-                                "invalid URL (missing scheme): " + request.url);
-    }
-
-    CURL* handle = curl_easy_init();
-    if (handle == nullptr) {
-        throw core::AstralError(core::Errc::Internal, "curl_easy_init failed");
-    }
+    PreparedRequest prepared(request, options_, "Accept: application/json");
+    CURL* handle = prepared.handle();
 
     HttpResponse response;
-    struct curl_slist* headerList = nullptr;
-    auto cleanup = [&handle, &headerList] {
-        if (headerList != nullptr) {
-            curl_slist_free_all(headerList);
-        }
-        curl_easy_cleanup(handle);
-    };
-
-    headerList = curl_slist_append(headerList, "Accept: application/json");
-    for (const auto& [key, value] : request.headers) {
-        headerList = curl_slist_append(headerList, (key + ": " + value).c_str());
-    }
-    if (request.bearerToken) {
-        headerList = curl_slist_append(headerList,
-                                       ("Authorization: Bearer " + *request.bearerToken).c_str());
-    }
-
-    curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(handle, CURLOPT_USERAGENT, options_.userAgent.c_str());
-    curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS,
-                     static_cast<long>(options_.connectTimeout.count()));
     curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS,
                      static_cast<long>(options_.requestTimeout.count()));
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, options_.verifyTls ? 1L : 0L);
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, options_.verifyTls ? 2L : 0L);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, appendToBody);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, collectHeader);
@@ -145,18 +168,13 @@ HttpResponse HttpClient::send(const HttpRequest& request) {
     if (request.method != "GET" && request.method != "POST") {
         curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, request.method.c_str());
     }
-    if (headerList != nullptr) {
-        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headerList);
-    }
 
     const CURLcode result = curl_easy_perform(handle);
     if (result != CURLE_OK) {
-        cleanup();
         throwCurlFailure(result, request.url);
     }
 
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.status);
-    cleanup();
     return response;
 }
 
@@ -213,55 +231,20 @@ size_t streamBody(char* data, size_t size, size_t count, void* userData) {
 } // namespace
 
 HttpResponse HttpClient::sendStreaming(const HttpRequest& request, const ChunkSink& onChunk) {
-    if (request.url.find("://") == std::string::npos) {
-        throw core::AstralError(core::Errc::NetworkError,
-                                "invalid URL (missing scheme): " + request.url);
-    }
-
-    CURL* handle = curl_easy_init();
-    if (handle == nullptr) {
-        throw core::AstralError(core::Errc::Internal, "curl_easy_init failed");
-    }
+    PreparedRequest prepared(request, options_, "Accept: text/event-stream");
+    CURL* handle = prepared.handle();
 
     StreamContext context;
     context.sink = &onChunk;
-    struct curl_slist* headerList = nullptr;
-    auto cleanup = [&handle, &headerList] {
-        if (headerList != nullptr) {
-            curl_slist_free_all(headerList);
-        }
-        curl_easy_cleanup(handle);
-    };
-
-    headerList = curl_slist_append(headerList, "Accept: text/event-stream");
-    for (const auto& [key, value] : request.headers) {
-        headerList = curl_slist_append(headerList, (key + ": " + value).c_str());
-    }
-    if (request.bearerToken) {
-        headerList = curl_slist_append(headerList,
-                                       ("Authorization: Bearer " + *request.bearerToken).c_str());
-    }
-
-    curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(handle, CURLOPT_USERAGENT, options_.userAgent.c_str());
-    curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS,
-                     static_cast<long>(options_.connectTimeout.count()));
     // No CURLOPT_TIMEOUT by design: the stream is long-lived. The stall
     // detector (<1 B/s for 60s) bounds dead peers; live streams see a
     // keepalive comment every 15s.
     curl_easy_setopt(handle, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(handle, CURLOPT_LOW_SPEED_TIME, 60L);
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, options_.verifyTls ? 1L : 0L);
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, options_.verifyTls ? 2L : 0L);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, streamBody);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &context);
     curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, streamHeader);
     curl_easy_setopt(handle, CURLOPT_HEADERDATA, &context);
-    if (headerList != nullptr) {
-        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headerList);
-    }
 
     const CURLcode result = curl_easy_perform(handle);
     HttpResponse response;
@@ -269,14 +252,12 @@ HttpResponse HttpClient::sendStreaming(const HttpRequest& request, const ChunkSi
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &finalStatus);
     response.status = finalStatus;
     if (result != CURLE_OK) {
-        cleanup();
         if (context.aborting &&
             (result == CURLE_WRITE_ERROR || result == CURLE_ABORTED_BY_CALLBACK)) {
             return response; // clean client stop, status is still valid
         }
         throwCurlFailure(result, request.url);
     }
-    cleanup();
     if (response.status != 200) {
         response.body = std::move(context.errorBody);
     }

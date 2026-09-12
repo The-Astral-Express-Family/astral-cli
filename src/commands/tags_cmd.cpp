@@ -131,16 +131,16 @@ public:
             return runList(context);
         }
         if (node_->got_subcommand(createSub_)) {
-            return runMutate(context, "create", "");
+            return runMutate(context, Action::Create, "");
         }
         if (node_->got_subcommand(renameSub_)) {
             if (newName_.empty()) {
                 throw core::AstralError(core::Errc::Usage, "tags rename needs a <new-name>");
             }
-            return runMutate(context, "rename", newName_);
+            return runMutate(context, Action::Rename, newName_);
         }
         if (node_->got_subcommand(deleteSub_)) {
-            return runMutate(context, "delete", "");
+            return runMutate(context, Action::Delete, "");
         }
         throw core::AstralError(core::Errc::Usage, "no tags subcommand selected");
     }
@@ -171,16 +171,26 @@ private:
 
     // create/rename/delete share one flow: resolve target (rename/delete),
     // then either propose (printing the confirm hint) or confirm directly.
-    int runMutate(const CommandContext& context, const std::string& action,
-                  const std::string& confirmName) {
+    enum class Action { Create, Rename, Delete };
+
+    static const char* wireName(Action action) {
+        switch (action) {
+        case Action::Create: return "create";
+        case Action::Rename: return "rename";
+        case Action::Delete: return "delete";
+        }
+        return "create"; // unreachable; pacifies compilers
+    }
+
+    int runMutate(const CommandContext& context, Action action, const std::string& confirmName) {
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         std::string name = confirmName;
         std::string targetId;
-        if (action != "create") {
+        if (action != Action::Create) {
             const TagRef target = resolveTag(api, ws, target_);
             targetId = target.id;
-            if (action == "delete") {
+            if (action == Action::Delete) {
                 name = target.name; // confirm's name must match the proposal input
             }
         }
@@ -191,16 +201,20 @@ private:
         // The hint must be a complete, copy-pasteable command line (positional
         // arguments included) or the two-step flow dead-ends for humans.
         std::string verb;
-        if (action == "create") {
+        switch (action) {
+        case Action::Create:
             verb = "create " + name_;
-        } else if (action == "rename") {
+            break;
+        case Action::Rename:
             verb = "rename " + target_ + " " + newName_;
-        } else {
+            break;
+        case Action::Delete:
             verb = "delete " + target_;
+            break;
         }
 
         if (confirmCode_.empty() && proposalId_.empty()) {
-            const json proposal = propose(api, ws, action, name, targetId);
+            const json proposal = propose(api, ws, wireName(action), name, targetId);
             if (context.json) {
                 output::printJson(context.out, proposal); // TagProposal verbatim
                 return 0;
@@ -218,9 +232,18 @@ private:
             output::printJson(context.out, tag); // Tag verbatim
             return 0;
         }
-        const std::string outcome = action == "delete"
-                                        ? "deleted"
-                                        : (action == "rename" ? "renamed to " + name : "created");
+        std::string outcome;
+        switch (action) {
+        case Action::Create:
+            outcome = "created";
+            break;
+        case Action::Rename:
+            outcome = "renamed to " + name;
+            break;
+        case Action::Delete:
+            outcome = "deleted";
+            break;
+        }
         context.out << "Tag " << scalarOr(tag, "id") << " " << outcome << '\n';
         return 0;
     }
