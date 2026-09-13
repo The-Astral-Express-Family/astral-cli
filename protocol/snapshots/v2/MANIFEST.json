@@ -1,8 +1,8 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "0330768",
-  "published_at": "2026-09-10",
+  "source_commit": "48ab5f2",
+  "published_at": "2026-09-13",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
@@ -26,7 +26,8 @@
     "idempotency": "Idempotency-Key 已实装：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx （响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 2 于全部 /api/v1 响应",
     "approvals": "发起需 workspace:manage_members，裁决仅限 workspace owner；approve 同事务执行 promote；TTL 72h 惰性过期；重复裁决 409 APPROVAL_EXPIRED",
-    "task_tags": "PUT/DELETE /tasks/{id}/tags/{tag_id}；attach 幂等（已挂不 bump revision）；detach 幂等（未挂 204）；关联使 task revision +1 并发 task.updated（data.tag_change）"
+    "task_tags": "PUT/DELETE /tasks/{id}/tags/{tag_id}；attach 幂等（已挂不 bump revision）；detach 幂等（未挂 204）；关联使 task revision +1 并发 task.updated（data.tag_change）",
+    "actor_profile": "Actor 恒带 bio/avatar_url（空串=未设置）；PATCH /auth/me 部分更新（只改出现的字段，全缺省为幂等 no-op；display_name 非空白、bio ≤500、avatar_url 仅 http(s) 外链、空串=清除）；Me = {actor, email?(仅 human 只读), session?（phase-6 前不下发）}"
   },
   "breaking_changes": [
     "protocol_version 1 -> 2（旧 CLI 被服务端干净拒绝，须同步升级）",
@@ -38,8 +39,20 @@
     "Task 响应恒填充 tags（空数组兜底，修订 D11）与 children_count",
     "修复：search 结果行内联任务字段（v1 误包在 Task 键下）；tag 模块生产装配补接 DB（v1 全部 tag HTTP 端点 500）"
   ],
-  "synced_at": "2026-09-10",
+  "synced_at": "2026-09-13",
   "revisions": [
+    {
+      "date": "2026-09-13",
+      "label": "v2.1 快照刷新（modulator TODO §11 第 14 项）",
+      "from_commit": "0330768",
+      "to_commit": "48ab5f2",
+      "changes": [
+        "新增 PATCH /auth/me（actor 资料部分更新：display_name/bio/avatar_url）；Me 响应增 email（human 只读）；Actor schema 恒带 bio/avatar_url",
+        "device flow 的 verification_uri/verification_uri_complete 固化为绝对 URL（round 27/28 起，对齐 openapi format: uri；CLI 直接打开/展示，不二次拼接）",
+        "SSE events 端点补 404（非成员，不泄露存在性）/403（缺 workspace:read scope）契约（round 22 语义的文档收敛）",
+        "形态漂移收拢（无语义变化）：round 18 任务过滤参数组件化（TaskStatusFilter 等）、round 21 Conflict→DocumentConflict 更名、错误/事件 schema 描述措辞"
+      ]
+    },
     {
       "date": "2026-09-10",
       "from_commit": "e0e4b11(v1)",

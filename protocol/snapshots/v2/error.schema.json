@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/The-Astral-Express-Family/astral-modulator/main/api/schemas/error.json",
   "title": "Astral Error Envelope",
-  "description": "所有非 2xx JSON 响应的统一形状（docs/protocol.md §4）。服务端 internal/httpx/errors.go 必须与此同步。",
+  "description": "所有非 2xx JSON 响应的统一形状（wire 语义见 docs/protocol.md 错误 envelope 一节）。服务端 internal/httpx/errors.go 必须与此同步。",
   "type": "object",
   "required": [
     "error"

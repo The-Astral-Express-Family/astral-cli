@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/The-Astral-Express-Family/astral-modulator/main/api/schemas/event.json",
   "title": "Astral Event Envelope",
-  "description": "SSE/未来 WebSocket 共用的事件 envelope。事件 payload 契约的事实来源（docs/protocol.md §14-15）。服务端 internal/modules/event/types.go 必须与此同步。",
+  "description": "SSE/未来 WebSocket 共用的事件 envelope。事件类型清单以此文件为准。服务端 internal/modules/event/types.go 必须与此同步。",
   "type": "object",
   "required": [
     "id",
