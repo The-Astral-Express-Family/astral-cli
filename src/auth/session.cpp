@@ -110,11 +110,14 @@ ServerInfo discoverServer(const std::string& serverUrl, const HttpFn& http) {
 
 std::string resolveServerUrl(const std::optional<std::string>& positional,
                              const std::optional<std::string>& flag) {
-    std::optional<std::string> candidate = positional ? positional : flag;
-    // CLI11 的可选 positional 缺席时表现为空串；视为未提供。
-    if (candidate && candidate->empty()) {
-        candidate.reset();
+    // CLI11 的可选 positional 缺席时表现为空串；先把它归一成「未提供」，
+    // 再做 positional > flag 的优先级选择——否则空串 positional 会遮蔽
+    // 显式给出的 --server（历史行为：`whoami --server X` 静默丢旗标）。
+    std::optional<std::string> provided = positional;
+    if (provided && provided->empty()) {
+        provided.reset();
     }
+    std::optional<std::string> candidate = provided ? std::move(provided) : flag;
     if (!candidate) {
         candidate = core::env::get("ASTRAL_SERVER");
     }
