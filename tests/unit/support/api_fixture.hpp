@@ -16,6 +16,12 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 #include "app/app.hpp"
@@ -93,9 +99,17 @@ struct CwdGuard {
 };
 
 inline std::filesystem::path uniqueHome(const char* stem) {
+    // ctest registers each Catch2 case as its own PROCESS, so a plain
+    // in-process counter collides across cases and leaks credentials.json /
+    // .astral bindings between them. Disambiguate by pid as well.
     static int counter = 0;
+#ifdef _WIN32
+    const unsigned long pid = static_cast<unsigned long>(_getpid());
+#else
+    const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
     return std::filesystem::temp_directory_path() /
-           (std::string(stem) + "-" + std::to_string(++counter));
+           (std::string(stem) + "-" + std::to_string(pid) + "-" + std::to_string(++counter));
 }
 
 // ---- scripted transport --------------------------------------------------
