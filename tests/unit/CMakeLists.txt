@@ -3,6 +3,7 @@ add_executable(astral-unit-tests
   test_cli.cpp
   test_device_flow.cpp
   test_event_cmd.cpp
+  test_profile_cmd.cpp
   test_todo_cmd.cpp
   test_file_credential_store.cpp
   test_json_output.cpp

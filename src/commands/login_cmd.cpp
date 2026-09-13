@@ -139,7 +139,7 @@ public:
         auto store = platform::makeDefaultCredentialStore();
         platform::LoginSession session = auth::requireSession(*store, baseUrl);
 
-        const auth::ServerInfo server = auth::discoverServer(baseUrl, auth::realHttp());
+        const auth::ServerInfo server = auth::discoverServer(baseUrl, auth::commandHttp());
         // Session-only identity probe (never ASTRAL_TOKEN), one lazy refresh.
         const std::string meUrl = server.origin() + server.apiBase + "/auth/me";
         const client::HttpResponse response = auth::sessionGet(*store, session, meUrl);
@@ -153,16 +153,26 @@ public:
         }
         const nlohmann::json body = nlohmann::json::parse(response.body);
         const nlohmann::json& actor = body.at("actor");
+        // Me envelope (snapshot v2.1): email rides top-level and only for
+        // human actors; agent/service sessions omit it.
+        const std::string email = body.value("email", std::string());
 
         if (context.json) {
-            output::printJson(context.out, {{"server_url", session.serverUrl},
-                                            {"server_id", session.serverId},
-                                            {"actor", actor}});
+            nlohmann::json payload = {{"server_url", session.serverUrl},
+                                      {"server_id", session.serverId},
+                                      {"actor", actor}};
+            if (!email.empty()) {
+                payload["email"] = email;
+            }
+            output::printJson(context.out, payload);
             return 0;
         }
         context.out << actor.value("display_name", "<unknown>") << " (" << session.principalId
                     << ", " << actor.value("kind", "unknown") << ") on " << session.serverUrl
                     << "\n";
+        if (!email.empty()) {
+            context.out << "email:  " << email << "\n";
+        }
         return 0;
     }
 

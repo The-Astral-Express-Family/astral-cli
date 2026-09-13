@@ -125,7 +125,7 @@ nlohmann::json sendJson(const ApiSession& api, std::string method, const std::st
 
 client::HttpResponse sessionGet(platform::CredentialStore& store, platform::LoginSession& session,
                                 const std::string& url) {
-    const HttpFn http = realHttp();
+    const HttpFn http = commandHttp();
     const auto call = [&http, &url](const platform::LoginSession& s) {
         client::HttpRequest request;
         request.url = url;
@@ -137,7 +137,7 @@ client::HttpResponse sessionGet(platform::CredentialStore& store, platform::Logi
 
 client::HttpResponse sessionPost(platform::CredentialStore& store, platform::LoginSession& session,
                                  const std::string& url, const std::string& jsonBody) {
-    const HttpFn http = realHttp();
+    const HttpFn http = commandHttp();
     const auto call = [&http, &url, &jsonBody](const platform::LoginSession& s) {
         client::HttpRequest request;
         request.method = "POST";

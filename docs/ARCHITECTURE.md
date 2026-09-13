@@ -80,6 +80,7 @@ v0.1 采用下面这组主入口：
 astral login <server_url>      # 已实装
 astral logout <server_url>     # 已实装
 astral whoami [<server_url>]   # 已实装
+astral profile show/set        # 已实装（round 29，GET/PATCH /auth/me）
 astral init <server_url>[/<workspace_name>] [path]   # 已实装
 
 astral workspace ...           # 桩（规划中）
@@ -95,6 +96,13 @@ astral version                 # 已实装
 ```
 
 `astral login` 是正式入口，不再要求用户记 `astral auth login --server ...` 这类长写法。
+
+`astral profile`（round 29）消费快照 v2.1 的 actor 资料契约：`show` 渲染
+GET /auth/me 的 Me envelope（email 仅 human），`set` 以部分更新语义调
+PATCH /auth/me——只序列化给出的字段，bio/avatar_url 空串=清除，空
+display_name 本地即拒。鉴权走 §6.3 Bearer 策略（ASTRAL_TOKEN 优先），
+因此 agent 凭证可以用它自管 display_name/bio/avatar_url。server 解析为
+positional > `--server` > repo 绑定 > `ASTRAL_SERVER`。
 
 所有需要网络的命令必须能够从 Workspace 绑定或显式参数中确定服务器。无法确定时立即报错，不猜服务器。
 
