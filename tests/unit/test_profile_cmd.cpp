@@ -19,12 +19,11 @@ namespace {
 // Me envelope per snapshot v2.1: actor (bio/avatar_url always present,
 // empty string = unset) + email (human only) + session (phase-6, absent).
 const json kMe = json{
-    {"actor",
-     json{{"id", "usr_1"},
-          {"kind", "human"},
-          {"display_name", "Alice"},
-          {"bio", "building astral"},
-          {"avatar_url", ""}}},
+    {"actor", json{{"id", "usr_1"},
+                   {"kind", "human"},
+                   {"display_name", "Alice"},
+                   {"bio", "building astral"},
+                   {"avatar_url", ""}}},
     {"email", "alice@example.com"},
 };
 
@@ -34,7 +33,8 @@ TEST_CASE("profile show passes the Me envelope through verbatim with --json") {
     astral_test::ApiFixture fx;
     fx.fake().route("/auth/me", 200, kMe);
 
-    const astral_test::RunResult result = astral_test::runApp({"astral", "profile", "show", "--json"});
+    const astral_test::RunResult result =
+        astral_test::runApp({"astral", "profile", "show", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
@@ -135,7 +135,7 @@ TEST_CASE("profile without any credential is AUTH_REQUIRED") {
 
 TEST_CASE("whoami reports the human email from the Me envelope") {
     astral_test::ApiFixture fx;
-    fx.installSession(); // drops ASTRAL_TOKEN, installs a refreshable session
+    fx.installSession();                      // drops ASTRAL_TOKEN, installs a refreshable session
     fx.fake().route("/auth/me", 200, kMe, 2); // human + machine runs each consume one
 
     const astral_test::RunResult human =
@@ -163,8 +163,8 @@ TEST_CASE("explicit --server flag reaches identity commands despite absent posit
     REQUIRE(whoami.exitCode == static_cast<int>(astral::core::ExitCode::Auth)); // no session
     REQUIRE(json::parse(whoami.out).at("error").at("code") == "AUTH_REQUIRED");
 
-    const astral_test::RunResult profile =
-        astral_test::runApp({"astral", "profile", "show", "--server", "https://api.test", "--json"});
+    const astral_test::RunResult profile = astral_test::runApp(
+        {"astral", "profile", "show", "--server", "https://api.test", "--json"});
     REQUIRE(profile.exitCode == 0);
     REQUIRE(json::parse(profile.out) == kMe);
 }

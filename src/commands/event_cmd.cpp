@@ -60,10 +60,10 @@ private:
         client::HttpClient http;
         const auth::HttpFn transport = auth::realHttp();
         platform::LoginSession session; // filled by the human-session branch below
-        const events::AttemptFn stream =
-            [&http](const client::HttpRequest& request, const client::ChunkSink& sink) {
-                return http.sendStreaming(request, sink);
-            };
+        const events::AttemptFn stream = [&http](const client::HttpRequest& request,
+                                                 const client::ChunkSink& sink) {
+            return http.sendStreaming(request, sink);
+        };
 
         // Auth policy mirrors ApiSession::send (ARCHITECTURE.md section 6.3):
         // ASTRAL_TOKEN wins outright and never refreshes; otherwise the human

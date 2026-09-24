@@ -141,7 +141,8 @@ int runListenLoop(const ListenOptions& options, const AttemptFn& attempt, const 
                             std::chrono::seconds(seconds));
                     }
                 }
-                diagnose = "event stream unavailable (HTTP " + std::to_string(response.status) + ")";
+                diagnose =
+                    "event stream unavailable (HTTP " + std::to_string(response.status) + ")";
             } else {
                 // 401 (after the caller's lazy refresh), 403, 404 and every other
                 // 4xx will not heal by retrying: map through the standard

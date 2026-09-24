@@ -55,13 +55,20 @@ public:
         app.require_subcommand(1);
 
         CLI::App* show = app.add_subcommand("show", "Show your profile (GET /auth/me)");
-        show->add_option("server_url", showServer_, "Server base URL (default: --server/ASTRAL_SERVER)");
+        show->add_option("server_url", showServer_,
+                         "Server base URL (default: --server/ASTRAL_SERVER)");
 
         CLI::App* set = app.add_subcommand("set", "Update your profile (PATCH /auth/me, partial)");
-        set->add_option("server_url", setServer_, "Server base URL (default: --server/ASTRAL_SERVER)");
-        set->add_option("--display-name", displayName_, "New display name (1-200 chars)");
-        set->add_option("--bio", bio_, "New bio; empty string clears it (max 500 chars)");
-        set->add_option("--avatar-url", avatarUrl_, "New avatar http(s) URL; empty string clears it");
+        set->add_option("server_url", setServer_,
+                        "Server base URL (default: --server/ASTRAL_SERVER)");
+        // 「是否显式给出」以 count() 判定而非 optional 置位：CLI11 对空串值
+        // 不置位 optional（mac/win 观测），而 --bio "" 的语义正是“清空”，
+        // 必须与“未提供”区分。
+        displayOpt_ =
+            set->add_option("--display-name", displayName_, "New display name (1-200 chars)");
+        bioOpt_ = set->add_option("--bio", bio_, "New bio; empty string clears it (max 500 chars)");
+        avatarOpt_ = set->add_option("--avatar-url", avatarUrl_,
+                                     "New avatar http(s) URL; empty string clears it");
 
         showSub_ = show;
         setSub_ = set;
@@ -103,25 +110,28 @@ private:
     }
 
     int runSet(const CommandContext& context) {
-        if (!displayName_ && !bio_ && !avatarUrl_) {
+        const bool gaveDisplay = displayOpt_->count() > 0;
+        const bool gaveBio = bioOpt_->count() > 0;
+        const bool gaveAvatar = avatarOpt_->count() > 0;
+        if (!gaveDisplay && !gaveBio && !gaveAvatar) {
             throw core::AstralError(core::Errc::Usage,
                                     "no profile field given (use --display-name, --bio, "
                                     "--avatar-url; repeat `profile show` to inspect)");
         }
-        if (displayName_ && displayName_->empty()) {
-            throw core::AstralError(core::Errc::Usage,
-                                    "--display-name must not be empty (server rejects blank names)");
+        if (gaveDisplay && displayName_.empty()) {
+            throw core::AstralError(
+                core::Errc::Usage, "--display-name must not be empty (server rejects blank names)");
         }
 
         json body = json::object();
-        if (displayName_) {
-            body["display_name"] = *displayName_;
+        if (gaveDisplay) {
+            body["display_name"] = displayName_;
         }
-        if (bio_) {
-            body["bio"] = *bio_;
+        if (gaveBio) {
+            body["bio"] = bio_;
         }
-        if (avatarUrl_) {
-            body["avatar_url"] = *avatarUrl_;
+        if (gaveAvatar) {
+            body["avatar_url"] = avatarUrl_;
         }
 
         auth::ApiSession api = openApi(setServer_, context);
@@ -135,16 +145,18 @@ private:
         return 0;
     }
 
-
     CLI::App* node_ = nullptr;
     CLI::App* showSub_ = nullptr;
     CLI::App* setSub_ = nullptr;
 
     std::string showServer_;
     std::string setServer_;
-    std::optional<std::string> displayName_;
-    std::optional<std::string> bio_;
-    std::optional<std::string> avatarUrl_;
+    std::string displayName_;
+    std::string bio_;
+    std::string avatarUrl_;
+    CLI::Option* displayOpt_ = nullptr;
+    CLI::Option* bioOpt_ = nullptr;
+    CLI::Option* avatarOpt_ = nullptr;
 };
 
 } // namespace

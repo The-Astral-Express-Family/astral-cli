@@ -175,9 +175,12 @@ private:
 
     static const char* wireName(Action action) {
         switch (action) {
-        case Action::Create: return "create";
-        case Action::Rename: return "rename";
-        case Action::Delete: return "delete";
+        case Action::Create:
+            return "create";
+        case Action::Rename:
+            return "rename";
+        case Action::Delete:
+            return "delete";
         }
         return "create"; // unreachable; pacifies compilers
     }

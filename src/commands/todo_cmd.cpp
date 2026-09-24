@@ -297,9 +297,9 @@ private:
         appendParam(query, "tag", tag_);
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
-        const json items =
-            auth::fetchPageItems(api, "/workspaces/" + ws.workspaceId + "/task-search",
-                                 std::move(query), pageFlags_.paging.all, "task search", nextCursor);
+        const json items = auth::fetchPageItems(
+            api, "/workspaces/" + ws.workspaceId + "/task-search", std::move(query),
+            pageFlags_.paging.all, "task search", nextCursor);
 
         if (context.json) {
             printPageJson(context.out, ws.workspaceId, items, nextCursor);
