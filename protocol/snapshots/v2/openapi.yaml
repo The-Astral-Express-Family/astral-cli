@@ -49,6 +49,7 @@ tags:
   - name: events
   - name: agents
   - name: approvals
+  - name: admin
 
 security:
   - bearerAuth: []
@@ -83,9 +84,9 @@ paths:
   /auth/register:
     post:
       tags: [auth]
-      summary: Bootstrap 注册首个 Human（仅当服务器无 human 时开放；D6）
+      summary: 注册 Human（A5）：带 invite_code 走邀请兑换；不带则为 bootstrap（仅当服务器无 human）
       security: []
-      operationId: registerBootstrap
+      operationId: register
       requestBody:
         required: true
         content:
@@ -97,13 +98,22 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 8, maxLength: 72, description: 需含字母与数字 }
                 display_name: { type: string }
+                invite_code:
+                  type: string
+                  description: >
+                    一次性邀请码（XXXXX-XXXXX-XXXXX-XXXXX，比对前归一化：去分隔符+大写）。
+                    兑换即建号 + 入伙 + 建立 web 会话（docs/registration.md §4）。
       responses:
         "201":
-          description: 已创建（返回 actor）
+          description: "已注册（Set-Cookie: astral_session；响应 = Me + session，与 login 同形状）"
+          headers:
+            Set-Cookie: { schema: { type: string }, description: "HttpOnly, SameSite=Lax, Secure(HTTPS)" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
-        "403": { $ref: "#/components/responses/Error" }   # 已有 human，注册关闭
+        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（四种失效统一防探测）或 VALIDATION_FAILED
+        "403": { $ref: "#/components/responses/Error" }   # bootstrap 分支：已有 human，注册关闭
+        "409": { $ref: "#/components/responses/Error" }   # EMAIL_TAKEN（此时邀请不消耗）
 
   /auth/login:
     post:
@@ -234,6 +244,33 @@ paths:
       operationId: logout
       responses:
         "204": { description: 已登出 }
+
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: 列出当前 human 的活跃会话（设备管理页）
+      operationId: listSessions
+      responses:
+        "200":
+          description: 会话条目数组（已撤销/已过期不入列；最近使用优先）
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SessionView" }
+        "403": { $ref: "#/components/responses/Error" }   # agent/service credential
+
+  /auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: 注销自己的一个会话（设备管理页「注销」；当前会话走 /auth/logout）
+      operationId: revokeSession
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已注销 }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }   # 不存在/非本人/已撤销 同码防枚举
 
   /auth/me:
     get:
@@ -733,7 +770,7 @@ paths:
   /workspaces/{workspace_id}/presence:
     get:
       tags: [presence]
-      summary: workspace 在线状态总览（GUI 首页数据源）
+      summary: workspace 在线状态总览（GUI 首页数据源；成员规模有界，不分页但信封统一）
       operationId: listPresence
       parameters:
         - { $ref: "#/components/parameters/WorkspaceId" }
@@ -748,6 +785,9 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Presence" }
+                  next_cursor:
+                    type: [string, "null"]
+                    description: 恒 null（presence 按 workspace 成员规模有界，不做翻页；字段仅为列表信封统一）
 
   /workspaces/{workspace_id}/messages:
     parameters:
@@ -769,10 +809,11 @@ paths:
               schema: { $ref: "#/components/schemas/Message" }
     get:
       tags: [messages]
-      summary: 消息列表（按 target/thread 过滤）
+      summary: 消息列表（按 target/thread 过滤，最新在前）
       operationId: listMessages
       parameters:
         - { name: thread_id, in: query, schema: { type: string } }
+        - { name: target_id, in: query, schema: { type: string } }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -836,10 +877,18 @@ paths:
   /workspaces/{workspace_id}/documents/manifest:
     get:
       tags: [documents]
-      summary: 受管文档清单（同步基准）
+      summary: 受管文档清单（同步基准；path 升序游标分页，默认不含已删除 tombstone）
       operationId: getDocumentManifest
       parameters:
         - { $ref: "#/components/parameters/WorkspaceId" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: include_deleted
+          in: query
+          schema: { type: boolean, default: false }
+          description: true 时包含 tombstone 行（deleted=true），供同步端侦测远端删除
       responses:
         "200":
           description: manifest
@@ -851,6 +900,7 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/ManifestItem" }
+                  next_cursor: { type: [string, "null"] }
 
   /workspaces/{workspace_id}/documents/{path}:
     parameters:
@@ -862,6 +912,9 @@ paths:
         description: |
           严格 URL 编码的仓库相对路径（'/' 分隔）。服务端 canonicalize，
           拒绝 '..'/绝对路径/secrets 默认路径。
+          `memory/` 前缀是保留子空间（M1 裁决）：该前缀下的读写需要
+          memory:read / memory:write scope（而非 document:*）；
+          组织记忆即保留 workspace `org-memory` 下的 `memory/**` 文档。
         x-astral-wildcard: true
     get:
       tags: [documents]
@@ -890,14 +943,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Document" }
         "409": { $ref: "#/components/responses/Error" }   # DOCUMENT_CONFLICT，产生 conflict artifact
+    delete:
+      tags: [documents]
+      summary: 版本化删除（tombstone；携带 base_revision，禁止盲删）
+      operationId: deleteDocument
+      parameters:
+        - name: base_revision
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+          description: 调用方所见版本；与当前版本不一致（远端已变更/已删除）时不盲删
+      responses:
+        "204": { description: 已打 tombstone（revision+1，deleted=true，事件 document.updated data.deleted=true） }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }   # base 与当前不一致：远端有变更 → 落 conflict artifact；已是 tombstone 且 base 匹配 → 幂等 204
 
   /workspaces/{workspace_id}/conflicts:
     get:
       tags: [documents]
-      summary: 未解决冲突列表
+      summary: 未解决冲突列表（created_at 降序游标分页；默认只列 open）
       operationId: listConflicts
       parameters:
         - { $ref: "#/components/parameters/WorkspaceId" }
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, all], default: open }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
         "200":
           description: 冲突列表
@@ -909,6 +982,23 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/DocumentConflict" }
+                  next_cursor: { type: [string, "null"] }
+
+  /workspaces/{workspace_id}/conflicts/{conflict_id}:
+    get:
+      tags: [documents]
+      summary: 冲突详情（含双方完整内容；解决视图数据源）
+      operationId: getConflict
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - { name: conflict_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 冲突双方内容与 base 指针
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentConflictDetail" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:
     post:
@@ -949,6 +1039,57 @@ paths:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Error" }   # 非成员：WORKSPACE_NOT_FOUND（不泄露存在性）
         "403": { $ref: "#/components/responses/Error" }   # 成员但缺 workspace:read scope
+
+  /workspaces/{workspace_id}/invitations:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [workspaces]
+      summary: 签发一次性邀请码（A5；需 human session + workspace:manage_members，agent credential 403）
+      operationId: createInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvitationCreate" }
+      responses:
+        "201":
+          description: 已签发；code 明文仅本次返回，invite_url 为拼好的注册链接
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationCreated" }
+        "400": { $ref: "#/components/responses/Error" }   # VALIDATION_FAILED（role/expires_in）
+        "403": { $ref: "#/components/responses/Error" }   # agent credential / INSUFFICIENT_SCOPE
+        "404": { $ref: "#/components/responses/Error" }   # 非成员不可见（WORKSPACE_NOT_FOUND）
+    get:
+      tags: [workspaces]
+      summary: 邀请列表（授权同签发；不含 code——库中只有 hash）
+      operationId: listInvitations
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [invited, redeemed, revoked] }
+      responses:
+        "200":
+          description: 邀请分页列表
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationPage" }
+        "400": { $ref: "#/components/responses/Error" }   # status 过滤值非法
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /invitations/{invitation_id}/revoke:
+    post:
+      tags: [workspaces]
+      summary: 撤销邀请（invited→revoked；对已关闭邀请幂等 204；授权同签发）
+      operationId: revokeInvitation
+      parameters:
+        - { name: invitation_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      responses:
+        "204": { description: 已撤销（或邀请本已关闭，幂等） }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /workspaces/{workspace_id}/agents:
     parameters:
@@ -1013,12 +1154,13 @@ paths:
   /workspaces/{workspace_id}/audit:
     get:
       tags: [workspaces]
-      summary: 审计时间线（audit:read；GUI 数据源）
+      summary: 审计时间线（audit:read；created_at 降序游标分页；GUI 数据源）
       operationId: listAudit
       parameters:
         - { $ref: "#/components/parameters/WorkspaceId" }
         - { name: actor_id, in: query, schema: { type: string } }
         - { name: action, in: query, schema: { type: string } }
+        - { name: outcome, in: query, schema: { type: string, enum: [allowed, denied, error] } }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -1032,6 +1174,115 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/AuditEntry" }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /admin/audit:
+    get:
+      tags: [admin]
+      summary: 平台级审计查询（platform:audit:read；含 workspace_id IS NULL 的服务器级记录，如认证失败）
+      operationId: listAdminAudit
+      parameters:
+        - { name: workspace_id, in: query, schema: { type: string } }
+        - { name: actor_id, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: outcome, in: query, schema: { type: string, enum: [allowed, denied, error] } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 审计分页列表（created_at 降序）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: 平台用户列表（human；platform:users:read）
+      operationId: listAdminUsers
+      responses:
+        "200":
+          description: 用户列表（平台用户量小，暂不分页）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /admin/users/{actor_id}/disable:
+    post:
+      tags: [admin]
+      summary: 停用账号（platform:users:manage；在途会话立即失效；禁止自停用）
+      operationId: disableAdminUser
+      parameters:
+        - { name: actor_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已停用 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /admin/users/{actor_id}/enable:
+    post:
+      tags: [admin]
+      summary: 恢复账号（platform:users:manage）
+      operationId: enableAdminUser
+      parameters:
+        - { name: actor_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: 已恢复 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /admin/users/{actor_id}/role:
+    post:
+      tags: [admin]
+      summary: 变更平台角色（platform:users:manage；仅 human 的 admin/user 互转；禁止自改）
+      operationId: changeAdminUserRole
+      parameters:
+        - { name: actor_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform_role]
+              properties:
+                platform_role:
+                  type: string
+                  enum: [admin, user]
+      responses:
+        "200":
+          description: 已变更（返回 AdminUser）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUser" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 
 components:
   securitySchemes:
@@ -1114,7 +1365,7 @@ components:
     Id:
       type: string
       pattern: "^[a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/prs/msg/evt/cred/ses/dev/req/aud/apv。
+      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/prs/msg/evt/cred/ses/dev/req/aud/apv/inv。
       examples: ["ws_0192ab34-56cd-7ef8-9a01-234567890abc"]
 
     IdOrNull:
@@ -1147,6 +1398,8 @@ components:
         - TASK_LEASE_EXPIRED
         - TAG_PROPOSAL_EXPIRED
         - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
+        - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期统一此码（防探测，400）
+        - EMAIL_TAKEN             # email 已被注册（409，仅邀请码验证通过后可达）
         - TAG_ALREADY_EXISTS
         - REVISION_CONFLICT
         - DOCUMENT_CONFLICT
@@ -1157,7 +1410,6 @@ components:
         - AUTHORIZATION_PENDING   # device flow 轮询（A1/RFC 8628），HTTP 400 + retryable
         - SLOW_DOWN               # device flow 轮询过快（A1），HTTP 400 + retryable
         - INTERNAL_ERROR
-        - NOT_IMPLEMENTED   # 仅脚手架阶段（HTTP 501），正式端点不得返回
 
     ErrorEnvelope:
       type: object
@@ -1233,18 +1485,62 @@ components:
 
     Me:
       type: object
-      required: [actor]
+      required: [actor, platform_role]
       properties:
         actor: { $ref: "#/components/schemas/Actor" }
         email:
           type: string
           format: email
           description: human 本地登录邮箱（只读）；agent/service 省略
+        platform_role:
+          type: string
+          enum: [admin, user, agent, service]
+          description: 认证主体的平台全局角色（round 33）；授权按服务端 scope 计算，客户端仅作展示
         session:
           type: object
           properties:
             client_type: { type: string, enum: [cli, web] }
             expires_at: { type: string, format: date-time }
+
+    SessionView:
+      type: object
+      description: 设备管理页的会话条目（一条 session = 一个已登录设备/浏览器）
+      required: [id, client_type, user_agent, remote_addr, created_at, expires_at, current]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        client_type: { type: string, enum: [cli, web] }
+        user_agent:
+          type: string
+          description: 创建会话时的 User-Agent 原文；客户端负责友好化展示
+        remote_addr: { type: string, description: 创建会话时的客户端 IP（XFF 采信规则同限流） }
+        created_at: { type: string, format: date-time }
+        last_used_at:
+          type: string
+          format: date-time
+          description: 最近一次认证使用（access/cookie 每分钟节流、refresh 时更新）；从未使用则省略
+        expires_at: { type: string, format: date-time }
+        current: { type: boolean, description: 是否为发起本次请求的会话 }
+
+    AdminUser:
+      type: object
+      description: 平台视角的用户条目（/admin/*，仅 admin 可见；含邮箱与停用态）
+      required: [id, kind, platform_role, display_name, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { type: string, enum: [human, agent, service] }
+        platform_role:
+          type: string
+          enum: [admin, user, agent, service]
+        display_name: { type: string }
+        email:
+          type: string
+          format: email
+          description: human_auth 中的登录邮箱；缺失时省略
+        disabled_at:
+          type: string
+          format: date-time
+          description: 非 null = 已停用
+        created_at: { type: string, format: date-time }
 
     Actor:
       type: object
@@ -1298,6 +1594,61 @@ components:
       properties:
         actor_id: { $ref: "#/components/schemas/Id" }
         role: { $ref: "#/components/schemas/Role" }
+
+    InvitationRole:
+      type: string
+      enum: [viewer, contributor, maintainer]
+      description: 邀请可授角色（永不含 owner——晋升必须走 approval，D8）
+
+    InvitationCreate:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/InvitationRole" }
+        expires_in:
+          type: integer
+          minimum: 1
+          maximum: 2592000
+          default: 604800
+          description: 有效期（秒）；缺省 7 天，上限 30 天
+
+    Invitation:
+      type: object
+      required: [id, workspace_id, role, status, created_by, created_at, expires_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        workspace_id: { $ref: "#/components/schemas/Id" }
+        role: { $ref: "#/components/schemas/InvitationRole" }
+        status:
+          type: string
+          enum: [invited, redeemed, revoked]
+          description: expired 为派生态（invited 且 now > expires_at），不落库
+        created_by: { $ref: "#/components/schemas/Id" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        redeemed_by: { $ref: "#/components/schemas/IdOrNull" }
+        redeemed_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+
+    InvitationCreated:
+      allOf:
+        - $ref: "#/components/schemas/Invitation"
+        - type: object
+          required: [code, invite_url]
+          properties:
+            code:
+              type: string
+              description: 邀请码明文（XXXXX-XXXXX-XXXXX-XXXXX，Crockford base32，100 bit 熵），仅签发响应返回一次
+            invite_url:
+              type: string
+              format: uri
+              description: "{WebBaseURL}/register?code=<code>；基址回退链 WebBaseURL→PublicURL→请求 Host"
+
+    InvitationPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/Invitation" } }
 
     TaskStatus:
       type: string
@@ -1443,12 +1794,14 @@ components:
 
     Message:
       type: object
-      required: [id, workspace_id, sender_id, body, created_at]
+      required: [id, workspace_id, sender_id, target_type, target_id, body, created_at]
       properties:
         id: { $ref: "#/components/schemas/Id" }
         workspace_id: { $ref: "#/components/schemas/Id" }
         thread_id: { $ref: "#/components/schemas/IdOrNull" }
         sender_id: { $ref: "#/components/schemas/Id" }
+        target_type: { type: string, enum: [actor, workspace, task] }
+        target_id: { $ref: "#/components/schemas/Id" }
         body: { type: string }
         metadata: { type: object, additionalProperties: true }
         created_at: { type: string, format: date-time }
@@ -1462,6 +1815,7 @@ components:
         content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$", description: CLI 本地 hash 必须与此算法/格式一致 }
         size: { type: integer }
         updated_at: { type: string, format: date-time }
+        deleted: { type: boolean, default: false, description: tombstone 标记；仅 include_deleted=true 时出现 }
 
     Document:
       type: object
@@ -1472,6 +1826,7 @@ components:
         content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         content: { type: string, description: UTF-8 Markdown }
         updated_at: { type: string, format: date-time }
+        deleted: { type: boolean, default: false, description: tombstone 行（删除后文档保留行、revision 继续递增） }
 
     DocumentPush:
       type: object
@@ -1484,12 +1839,31 @@ components:
 
     DocumentConflict:
       type: object
-      required: [id, path, base_revision, created_at]
+      required: [id, path, base_revision, base_hash, status, created_at]
       properties:
         id: { $ref: "#/components/schemas/Id" }
         path: { type: string }
         base_revision: { type: integer, format: int64 }
+        base_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        status: { type: string, enum: [open, resolved], description: resolved_at IS NULL 派生 }
+        ours_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$", description: push 方内容摘要（全文见详情端点） }
+        theirs_revision: { type: integer, format: int64, description: 冲突落档时的服务端当前版本 }
+        theirs_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         created_at: { type: string, format: date-time }
+        resolution: { type: [string, "null"], enum: [ours, theirs, merged, manual, null] }
+        resolved_by: { $ref: "#/components/schemas/IdOrNull" }
+        resolved_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+
+    DocumentConflictDetail:
+      type: object
+      description: 冲突详情 = 列表形状 + 双方完整内容（解决视图对比数据源）
+      allOf:
+        - $ref: "#/components/schemas/DocumentConflict"
+        - type: object
+          required: [ours_content, theirs_content]
+          properties:
+            ours_content: { type: string, description: push 方提交的完整内容 }
+            theirs_content: { type: string, description: 冲突落档时服务端持有的完整内容 }
 
     ConflictResolve:
       type: object
@@ -1522,6 +1896,12 @@ components:
           items: { type: string }
           description: 见 docs/architecture.md §10 scope 词表
         expires_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+        workspace_id:
+          type: string
+          description: |
+            授权分流（round 38 补录）：非空 = 在该 workspace 内以 agent:manage
+            签发（owner/maintainer）；空/缺省 = 平台级，要求 platform:credentials:manage。
+            workspace 轴的管理界面（MembersView）应传当前 workspace_id。
 
     CredentialIssued:
       type: object
@@ -1550,6 +1930,7 @@ components:
         target_type: { type: string }
         target_id: { $ref: "#/components/schemas/IdOrNull" }
         details: { type: object, additionalProperties: true, description: 已 redaction }
+        request_id: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
 
     # ---- approvals（architecture §22）----

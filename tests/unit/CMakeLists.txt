@@ -1,7 +1,9 @@
 add_executable(astral-unit-tests
   test_binding.cpp
   test_cli.cpp
+  test_content_hash.cpp
   test_device_flow.cpp
+  test_document_cmd.cpp
   test_event_cmd.cpp
   test_profile_cmd.cpp
   test_todo_cmd.cpp

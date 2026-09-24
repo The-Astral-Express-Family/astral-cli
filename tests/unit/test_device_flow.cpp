@@ -174,6 +174,38 @@ TEST_CASE("protocol version mismatch is rejected before any code exchange") {
                        }));
 }
 
+// R2（protocol.md §7）：判据是 min_cli_protocol_version 下限，不是相等——
+// 更新的服务端只要下限覆盖本 CLI 就兼容。
+TEST_CASE("a newer server whose min floor covers this CLI is accepted") {
+    FakeHttp fake{
+        .wellKnownBody =
+            R"({"server_id":"srv_01","api_base":"/api/v1","protocol_version":3,"min_cli_protocol_version":2})",
+        .createBody = kAuthorization,
+        .polls{{200, kTokenPair}},
+    };
+    const astral::platform::LoginSession session =
+        runDeviceFlow("https://s.example.com", refHttp(fake), noSleep, {});
+    CHECK(session.accessToken == "at_1");
+}
+
+TEST_CASE("a min floor above this CLI is rejected before any code exchange") {
+    FakeHttp fake{
+        .wellKnownBody =
+            R"({"server_id":"srv_01","api_base":"/api/v1","protocol_version":3,"min_cli_protocol_version":4})",
+        .createBody = kAuthorization};
+    try {
+        runDeviceFlow("https://s.example.com", refHttp(fake), noSleep, {});
+        FAIL("expected AstralError");
+    } catch (const astral::core::AstralError& error) {
+        CHECK(error.code() == astral::core::Errc::ProtocolIncompatible);
+        CHECK(std::string(error.what()).find(">= 4") != std::string::npos);
+    }
+    CHECK(std::none_of(fake.requestedUrls.begin(), fake.requestedUrls.end(),
+                       [](const std::string& url) {
+                           return url.find("/auth/device/authorizations") != std::string::npos;
+                       }));
+}
+
 TEST_CASE("a URL without a scheme is a local input error") {
     FakeHttp fake{.wellKnownBody = kWellKnown, .createBody = kAuthorization};
     try {

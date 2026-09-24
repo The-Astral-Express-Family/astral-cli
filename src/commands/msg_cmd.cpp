@@ -1,7 +1,5 @@
 #include "commands/msg_cmd.hpp"
 
-#include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +11,7 @@
 #include "auth/api.hpp"
 #include "commands/command.hpp"
 #include "commands/paging.hpp"
+#include "core/content_hash.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
@@ -63,17 +62,8 @@ MsgTarget parseTarget(const std::string& spec, const std::string& workspaceId) {
 
 // Deterministic content hash for the Idempotency-Key: re-running the same
 // send must dedupe server-side (24h replay window), so the key must be stable
-// across processes and platforms (std::hash gives neither guarantee).
-std::string fnv1aHex(const std::string& text) {
-    std::uint64_t hash = 1469598103934665603ull;
-    for (unsigned char c : text) {
-        hash ^= c;
-        hash *= 1099511628211ull;
-    }
-    char buffer[17];
-    std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(hash));
-    return buffer;
-}
+// across processes and platforms (shared core::fnv1aHex; std::hash gives
+// neither guarantee).
 
 class MsgCommand final : public Command {
 public:
@@ -123,8 +113,8 @@ private:
         // 24h 内服务端重放首次 2xx），内容相同 → key 相同。
         const json message = auth::sendJson(
             api, "POST", "/workspaces/" + ws.workspaceId + "/messages", body, "message send",
-            {{"Idempotency-Key",
-              "msg-" + fnv1aHex(target.type + "|" + target.id + "|" + thread_ + "|" + body_)}});
+            {{"Idempotency-Key", "msg-" + core::fnv1aHex(target.type + "|" + target.id + "|" +
+                                                         thread_ + "|" + body_)}});
 
         if (context.json) {
             output::printJson(context.out, message); // Message verbatim

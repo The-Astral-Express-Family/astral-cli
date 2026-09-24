@@ -72,6 +72,7 @@ ApiSession::ApiSession(const std::string& serverUrl)
 
 client::HttpResponse ApiSession::send(client::HttpRequest request) const {
     const HttpFn http = commandHttp();
+    stampClientHeaders(request);
     // Agent credential via environment wins outright and never refreshes.
     if (auto envToken = core::env::get("ASTRAL_TOKEN"); envToken && !envToken->empty()) {
         request.bearerToken = *envToken;
@@ -130,6 +131,7 @@ client::HttpResponse sessionGet(platform::CredentialStore& store, platform::Logi
         client::HttpRequest request;
         request.url = url;
         request.bearerToken = s.accessToken;
+        stampClientHeaders(request);
         return http(request);
     };
     return withLazyRefresh(store, http, session, call);
@@ -144,6 +146,7 @@ client::HttpResponse sessionPost(platform::CredentialStore& store, platform::Log
         request.url = url;
         request.bearerToken = s.accessToken;
         request.body = jsonBody;
+        stampClientHeaders(request);
         return http(request);
     };
     return withLazyRefresh(store, http, session, call);

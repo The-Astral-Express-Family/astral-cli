@@ -1,33 +1,44 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "48ab5f2",
-  "published_at": "2026-09-13",
+  "source_commit": "8ce293b",
+  "published_at": "2026-09-10",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
-    "openapi.yaml": "REST API 事实来源（v2：容器化任务树，全部 /api/v1 路径、字段、错误码、分页、并发语义）",
+    "openapi.yaml": "REST API 事实来源（v2：容器化任务树 + documents 同步，全部 /api/v1 路径、字段、错误码、分页、并发语义）",
     "error.schema.json": "统一错误 envelope 契约",
     "event.schema.json": "SSE/WebSocket 事件 envelope 契约",
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册；auth/workspace/children(根层与子层)/task-search/claim/lease/tags/presence/messages/events(SSE resume)/Idempotency-Key 为真实实现。documents/memory/audit 查询仍为 501 NOT_IMPLEMENTED 桩（CLI 不得依赖该错误码做正式逻辑）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.2 刷新自 8ce293b（round 29-38 增量）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
-    "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）",
+    "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
     "task_create": "POST <container>/children {title, description?, priority?, tags?}——parent 由容器端点寻址，TaskCreate 无 parent_id 字段；tags 按规范化名解析，未知名字 404 且整体不创建；创建走 Idempotency-Key 可用",
-    "device_flow": "POST /auth/device/authorizations {client_type} -> 轮询 POST /auth/device/authorizations/{device_code}/token；pending=400 AUTHORIZATION_PENDING，过快=400 SLOW_DOWN，均 retryable",
+    "device_flow": "POST /auth/device/authorizations {client_type} -> 轮询 POST /auth/device/authorizations/{device_code}/token；pending=400 AUTHORIZATION_PENDING，过快=400 SLOW_DOWN，均 retryable；verification_uri/verification_uri_complete 固化为绝对 URL（round 27/28 起，CLI 直接打开/展示，不二次拼接）",
     "token_refresh": "POST /auth/token/refresh {refresh_token}，rotating；重放 -> 401 TOKEN_REVOKED 且整族撤销（CLI 必须重新 login）",
     "astral_token": "agent credential 明文 astral_<base64url>，作 Bearer 使用",
     "workspace_resolve": "GET /workspaces?name=<exact-or-slug>；空 items = 不存在或不可见",
     "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
-    "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）",
-    "idempotency": "Idempotency-Key 已实装：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx （响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束",
+    "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）；非成员 404（不泄露存在性）/缺 workspace:read 403",
+    "idempotency": "Idempotency-Key：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx（响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束；同键并发在进程内互斥（R8，单实例 MVP）",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 2 于全部 /api/v1 响应",
     "approvals": "发起需 workspace:manage_members，裁决仅限 workspace owner；approve 同事务执行 promote；TTL 72h 惰性过期；重复裁决 409 APPROVAL_EXPIRED",
     "task_tags": "PUT/DELETE /tasks/{id}/tags/{tag_id}；attach 幂等（已挂不 bump revision）；detach 幂等（未挂 204）；关联使 task revision +1 并发 task.updated（data.tag_change）",
-    "actor_profile": "Actor 恒带 bio/avatar_url（空串=未设置）；PATCH /auth/me 部分更新（只改出现的字段，全缺省为幂等 no-op；display_name 非空白、bio ≤500、avatar_url 仅 http(s) 外链、空串=清除）；Me = {actor, email?(仅 human 只读), session?（phase-6 前不下发）}"
+    "actor_profile": "PATCH /auth/me 部分更新 display_name/bio/avatar_url；Me 响应含 email（human 只读）与 session.expires_at；Actor schema 恒带 bio/avatar_url",
+    "documents": "documents 七端点（manifest/get/push/delete + conflicts list/detail/resolve，round 38 实装）：content_hash 一律 sha256:<64 小写 hex>，基于原始 UTF-8 bytes 重算（不重写换行）——CLI 本地 hash 必须与此一致；push 事务内完成 R1 大小写检查（同 ws 仅大小写不同的已存路径 -> 400 VALIDATION_FAILED details.reason=path_case_collision）-> 行分类（创建 revision=1 / 快进 revision+1 / tombstone+base_revision=0 复活 / 失配落冲突工件 + 409 DOCUMENT_CONFLICT，details 含 conflict_id/current_revision/current_hash）；revision 匹配但 base_hash 不符 -> 400（本地状态错乱，不落工件）；content 上限 1MiB；push 支持 Idempotency-Key（重跑同命令重放首次 2xx，避免制造伪冲突工件）",
+    "documents_delete": "DELETE /workspaces/{id}/documents/{path}?base_revision=N（缺失 400）：未删且 revision 匹配 -> tombstone（revision+1 + document.updated data.deleted=true）+ 204；已删且 base 匹配 -> 幂等 204；不匹配 -> 冲突工件（delete-vs-edit / edit-vs-delete）；manifest 默认排除 tombstone，include_deleted=true 供同步端侦测远端删除；get 对 tombstone 返回 deleted=true",
+    "conflicts": "GET /workspaces/{id}/conflicts?status=open|resolved|all（默认 open）created_at DESC + id 游标；详情含双方全文（ours_content=push 方，theirs_content=服务端持有）；resolve POST {resolution: ours|theirs|merged|manual, content?}：ours -> 落 ours 内容新 revision；theirs -> 仅关闭（不 bump 不发事件，返回当前 Document）；merged/manual -> content 必填（缺失 400），落新 revision；已解决 -> 409；resolve 落内容时发 document.updated",
+    "memory_prefix": "memory/ 前缀是 documents 端点内的保留子空间（M1）：该前缀读写要求 memory:read / memory:write scope（其余路径 document:*）；组织记忆 = 保留 workspace org-memory 下的 memory/** 文档；无独立 memory API",
+    "pagination_envelope": "全部列表端点统一 {items,next_cursor} 信封（G1）：manifest（limit 缺省 200 上限 1000，游标=末行 path）/conflicts（共享 Limit 200）/workspace audit/admin audit/presence（next_cursor 恒 null，成员规模有界）",
+    "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
+    "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
+    "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
+    "capabilities": "GET /meta/capabilities features 至少含 task_lease 与 document_sync；客户端按 feature 判断能力，不猜测 server 实现版本",
+    "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
+    "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）"
   },
   "breaking_changes": [
     "protocol_version 1 -> 2（旧 CLI 被服务端干净拒绝，须同步升级）",
@@ -39,8 +50,21 @@
     "Task 响应恒填充 tags（空数组兜底，修订 D11）与 children_count",
     "修复：search 结果行内联任务字段（v1 误包在 Task 键下）；tag 模块生产装配补接 DB（v1 全部 tag HTTP 端点 500）"
   ],
-  "synced_at": "2026-09-13",
+  "synced_at": "2026-09-24",
   "revisions": [
+    {
+      "date": "2026-09-10",
+      "from_commit": "e0e4b11(v1)",
+      "to_commit": "0330768",
+      "changes": [
+        "任务树读取模型容器化（D15）：children 集合取代平铺 list，task-search 取代 tasks/search",
+        "TaskCreate 移除 parent_id；tags-on-create 实装（规范化名解析，未知 404）",
+        "Task 行内恒填充 tags 与 children_count（修订 D11）",
+        "task-search 补 assignee 结构化过滤，regex/fuzzy 强制前置废除（≥1 任意条件）",
+        "修复 search 结果行内联（原 Task 键包裹）与 tag 模块生产装配缺 DB",
+        "protocol_version 1 -> 2；openapi info.version 2.0.0-scaffold"
+      ]
+    },
     {
       "date": "2026-09-13",
       "label": "v2.1 快照刷新（modulator TODO §11 第 14 项）",
@@ -54,16 +78,22 @@
       ]
     },
     {
-      "date": "2026-09-10",
-      "from_commit": "e0e4b11(v1)",
-      "to_commit": "0330768",
+      "date": "2026-09-24",
+      "label": "v2.2 快照刷新（phase-5 消费前置）",
+      "from_commit": "48ab5f2",
+      "to_commit": "8ce293b",
       "changes": [
-        "任务树读取模型容器化（D15）：children 集合取代平铺 list，task-search 取代 tasks/search",
-        "TaskCreate 移除 parent_id；tags-on-create 实装（规范化名解析，未知 404）",
-        "Task 行内恒填充 tags 与 children_count（修订 D11）",
-        "task-search 补 assignee 结构化过滤，regex/fuzzy 强制前置废除（≥1 任意条件）",
-        "修复 search 结果行内联（原 Task 键包裹）与 tag 模块生产装配缺 DB",
-        "protocol_version 1 -> 2；openapi info.version 2.0.0-scaffold"
+        "documents 七端点实装（round 38，原 501 桩清零）：manifest/get/push/delete + conflicts list/detail/resolve；Document/ManifestItem/DocumentConflict/DocumentConflictDetail/DocumentPush/ConflictResolve schema",
+        "R1 行为：push 同 workspace 仅大小写不同路径 -> 400 VALIDATION_FAILED（details.reason=path_case_collision）",
+        "R2 版本协商：/api/v1 携带低于 min_cli_protocol_version 的 X-Astral-Client-Version 头 -> 400 CLIENT_VERSION_UNSUPPORTED（头缺失放行）；ErrorCode enum 移除 NOT_IMPLEMENTED",
+        "R7/R8 行为登记：login 成功不写 audit；Idempotency-Key 同键并发进程内互斥",
+        "G1 分页信封：documents manifest（limit 上限 1000 + include_deleted）/conflicts（status 过滤）/workspace audit/admin audit 补 {items,next_cursor}；presence next_cursor 恒 null；AuditEntry 增 request_id；/auth/me 增 session.expires_at（S4-4）",
+        "邀请注册（round 29）：POST /auth/register（invite_code）+ workspace invitations 管理端点；错误码 +INVITE_INVALID/EMAIL_TAKEN；事件 +security.invite.*",
+        "capabilities features += document_sync；CredentialCreate 增可选 workspace_id（G4 授权分流）",
+        "admin 用户管理（round 34）：GET /admin/users + disable/enable/role-change；GET /admin/audit（platform:audit:read）",
+        "rate limit 落地（S5）：429 RATE_LIMITED + Retry-After，敏感/轮询/通用/SSE 四桶（见 key_semantics.rate_limit）",
+        "会话管理端点（5fbb9e7）：GET /auth/sessions 列当前 human 活跃会话（SessionView）+ DELETE /auth/sessions/{id} 注销本人会话（统一 404 防枚举，撤销后断流）",
+        "CLI 侧修复提交（8ce293b）：error.json 的 ErrorCode enum 在 round 38 移除 NOT_IMPLEMENTED 时遗留非法尾逗号，文件此前不是合法 JSON（modulator 契约门未做严格 JSON 解析故未拦截）；修复无语义变化"
       ]
     }
   ]

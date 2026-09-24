@@ -6,9 +6,11 @@
 同时服务 Human 与 Agent 两类调用者：默认输出面向人，`--json` 提供稳定的机器契约。
 
 > 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
-> 已接通**协议快照 v2**（容器化任务树）：auth 链路（device flow / whoami /
-> logout / init 绑定）、`astral todo` / `astral tags` / `astral msg` 均已可用；
-> `astral event listen` 已实装（SSE -> JSON Lines，断线续传）。
+> 已接通**协议快照 v2.2**（容器化任务树 + documents 同步）：auth 链路（device
+> flow / whoami / logout / init 绑定）、`astral todo` / `astral tags` /
+> `astral msg` / `astral profile` 均已可用；`astral event listen` 已实装
+> （SSE -> JSON Lines，断线续传）；`astral document` 命令族已实装
+> （manifest/get/push/delete + conflicts list/show/resolve，phase-5 第一层）。
 
 ## 功能速览
 
@@ -23,6 +25,10 @@ astral todo list/add/show/claim/done/search
 astral tags list/create/rename/delete
                                 # 标签词典 + 两步确认（propose → --confirm，已可用）
 astral msg send/list            # workspace/actor:<id>/task:<id> 消息与线程（已可用）
+astral document manifest/get/push/delete
+                                # 受管文档读写（乐观并发 base_revision/base_hash，tombstone 删除，已可用）
+astral document conflicts list/show/resolve
+                                # 冲突双方对比与四选一解决（ours/theirs/merged/manual，已可用）
 astral event listen ...         # 已实装（round 22）
 astral doctor                   # 本地体检 + 服务端连通性探测（已可用）
 astral version                  # 版本信息（已可用）
@@ -51,7 +57,8 @@ git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
 export VCPKG_ROOT="$HOME/vcpkg"                    # 建议写入 shell 配置
 ```
 
-依赖（`vcpkg.json`，baseline 已锁）：CLI11、libcurl、nlohmann/json、spdlog、fmt；测试附加 Catch2。
+依赖（`vcpkg.json`，baseline 已锁）：CLI11、libcurl、nlohmann/json、spdlog、fmt、
+picosha2（header-only SHA-256，文档 content_hash 专用）；测试附加 Catch2。
 
 ## 构建与测试
 

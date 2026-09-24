@@ -9,6 +9,7 @@
     "curl",
     "fmt",
     "nlohmann-json",
+    "picosha2",
     "spdlog"
   ],
   "features": {

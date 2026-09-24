@@ -48,6 +48,16 @@ void setCommandTransportForTests(HttpFn transport) {
     commandTransportSlot() = std::move(transport);
 }
 
+void stampClientHeaders(client::HttpRequest& request) {
+    for (const auto& [name, value] : request.headers) {
+        if (name == "X-Astral-Client-Version") {
+            return;
+        }
+    }
+    request.headers.emplace_back("X-Astral-Client", "cli");
+    request.headers.emplace_back("X-Astral-Client-Version", std::to_string(core::kProtocolVersion));
+}
+
 void realSleep(std::chrono::milliseconds duration) {
     std::this_thread::sleep_for(duration);
 }
@@ -98,9 +108,16 @@ ServerInfo discoverServer(const std::string& serverUrl, const HttpFn& http) {
     } catch (const std::exception&) {
         throwProtocol("well-known: response is not valid JSON");
     }
+    // R2 版本协商（protocol.md §7）：CLI 在首连自查——自己的协议版本必须
+    // 达到服务端公布的 min_cli_protocol_version。高于本 CLI 的 protocol_
+    // version 仍然兼容（min 下限是服务端对客户端的承诺，不是相等断言）。
     const int protocolVersion = wellKnown.value("protocol_version", 0);
-    if (protocolVersion != core::kProtocolVersion) {
-        throwProtocol("server speaks protocol " + std::to_string(protocolVersion) +
+    const int minCli = wellKnown.value("min_cli_protocol_version", protocolVersion);
+    if (protocolVersion <= 0) {
+        throwProtocol("well-known: server does not announce a usable protocol_version");
+    }
+    if (core::kProtocolVersion < minCli) {
+        throwProtocol("server requires CLI protocol >= " + std::to_string(minCli) +
                       ", this CLI speaks " + std::to_string(core::kProtocolVersion));
     }
     info.serverId = requireString(wellKnown, "server_id", "well-known");
@@ -113,11 +130,14 @@ std::string resolveServerUrl(const std::optional<std::string>& positional,
     // CLI11 的可选 positional 缺席时表现为空串；先把它归一成「未提供」，
     // 再做 positional > flag 的优先级选择——否则空串 positional 会遮蔽
     // 显式给出的 --server（历史行为：`whoami --server X` 静默丢旗标）。
-    std::optional<std::string> provided = positional;
-    if (provided && provided->empty()) {
-        provided.reset();
+    // 显式 if 链而非三元 + move：gcc13 的 -Wmaybe-uninitialized 对
+    // optional 三元移动有已知误报（CI -Werror 下的红源之一）。
+    std::optional<std::string> candidate;
+    if (positional && !positional->empty()) {
+        candidate = positional;
+    } else if (flag) {
+        candidate = flag;
     }
-    std::optional<std::string> candidate = provided ? std::move(provided) : flag;
     if (!candidate) {
         candidate = core::env::get("ASTRAL_SERVER");
     }
@@ -158,6 +178,7 @@ withLazyRefresh(platform::CredentialStore& store, const HttpFn& http,
     refresh.url = ServerInfo{session.serverUrl, "", session.apiBase}.origin() + session.apiBase +
                   "/auth/token/refresh";
     refresh.body = json{{"refresh_token", session.refreshToken}}.dump();
+    stampClientHeaders(refresh);
     const client::HttpResponse rotated = http(refresh);
 
     if (rotated.status == 401) {

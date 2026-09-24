@@ -20,6 +20,12 @@ using SleepFn = std::function<void(std::chrono::milliseconds)>;
 HttpFn realHttp(std::chrono::milliseconds requestTimeout = std::chrono::seconds{30});
 void realSleep(std::chrono::milliseconds duration);
 
+// 给 /api/v1 请求打上 CLI 身份头（protocol.md §2）：X-Astral-Client: cli 与
+// X-Astral-Client-Version: <kProtocolVersion>（R2：服务端对低于 min 下限的
+// 版本头直接 400 CLIENT_VERSION_UNSUPPORTED；首连自查已在 discoverServer
+// 完成，这里保证每个请求都携带可判定的版本）。幂等：已打标不重复追加。
+void stampClientHeaders(client::HttpRequest& request);
+
 // Transport used by command layers (business commands, not device flow).
 // Defaults to realHttp(); tests swap in a scripted fake. Process-global
 // because commands are built inside runApp without fixture access.

@@ -88,7 +88,7 @@ astral todo ...                # 已实装（协议 v2）
 astral tags ...                # 已实装（round 19）
 astral status ...              # 桩（规划中）
 astral msg ...                 # 已实装（round 19）
-astral document ...            # 桩（phase-5，待裁决 M1）
+astral document ...            # 已实装（manifest/get/push/delete + conflicts list/show/resolve）
 astral event ...               # listen 已实装（round 22，SSE 流式 + 断线续传）
 astral agent ...               # 桩（规划中）
 astral doctor                  # 已实装
@@ -103,6 +103,39 @@ PATCH /auth/me——只序列化给出的字段，bio/avatar_url 空串=清除�
 display_name 本地即拒。鉴权走 §6.3 Bearer 策略（ASTRAL_TOKEN 优先），
 因此 agent 凭证可以用它自管 display_name/bio/avatar_url。server 解析为
 positional > `--server` > repo 绑定 > `ASTRAL_SERVER`。
+
+`astral document`（phase-5 第一层，消费快照 v2.2 的 documents 七端点）是
+单文档的命令面，不承担批量同步引擎（`astral sync` 是下一层，见 §11 尾）：
+
+```text
+astral document manifest [--include-deleted] [--all]   # 受管清单（path 升序游标）
+astral document get <path> [--raw]                     # 读取；--raw 只输出正文（脚本模式）
+astral document push <path> (--file <f>|'-'|--body <t>) [--base-revision N] [--base-hash H]
+astral document delete <path> [--base-revision N]      # tombstone 删除（禁止盲删）
+astral document conflicts list [--status open|resolved|all]
+astral document conflicts show <id>                    # 双方全文对比
+astral document conflicts resolve <id> --resolution ours|theirs|merged|manual [--file|--body]
+```
+
+关键语义（与 modulator sync-semantics / openapi 对齐）：
+
+- **content_hash 口径**：`sha256:<64 小写 hex>`，基于**原始 UTF-8 bytes**
+  （不重写换行，CRLF 原样进 hash 与 JSON body）；本地与远端不一致时 push
+  必被 400 拒——双端对接最易错点。内容须过 UTF-8 结构校验（超长编码/
+  代理区/截断序列本地即拒，exit 2），上限 1MiB。
+- **base 指针**：push/delete 缺省先 GET 当前行作 base（读改写，claim/done
+  同款节拍）；显式 `--base-revision 0` = 创建/复活（tombstone 行 push
+  base 0 即复活）；`--base-revision >0` 必须带 `--base-hash`。404 或
+  tombstone 都归零为 base 0。
+- **Idempotency-Key**：push 携带确定性 key（`doc-` + fnv1a(path|base_rev|
+  base_hash|content_hash)）——重跑同一命令重放首次 2xx；无 key 的重复
+  push 会以失配 base 命中 409 并在服务端落下**不可收回的伪冲突工件**。
+- **409 DOCUMENT_CONFLICT**：错误 envelope 的 `details.conflict_id` 被提升
+  进错误消息（`astral document conflicts show <id>` 提示），exit 5；
+  `--json` 仍透传 `error.code=DOCUMENT_CONFLICT` + request_id/retryable。
+- **路径编码**：按 `/` 分段、段内 urlEncode、`/` 字面保留；本地做结构
+  校验（空段/`..`/反斜杠/控制字符/超长），保留前缀黑名单与大小写冲突
+  （R1 `path_case_collision`）等权威判定留给服务端。
 
 所有需要网络的命令必须能够从 Workspace 绑定或显式参数中确定服务器。无法确定时立即报错，不猜服务器。
 
@@ -422,6 +455,11 @@ Idempotency-Key（内容 FNV-1a），重跑同一命令服务端 24h 内重放�
 自动丢弃过期游标，401 经一次 lazy refresh 重放；403/404 等终态按协议
 错误码退出。`--max-events N` 消费满即干净退出（不含控制事件）。
 
+Phase-5 分层：`astral document`（见 §4）是第一层单文档命令面；第二层
+`astral sync`（FR-010 pull/push/sync 引擎：本地扫描 → manifest 分类 →
+安全拉推 → 冲突汇聚，含受管路径 include/exclude 约定——round 38 R3
+裁决该约定归本仓持有）尚未动工，不承诺任何本地 state 文件布局。
+
 ## 12. Human 输出与 Agent 输出
 
 默认输出面向人：
@@ -467,12 +505,19 @@ Bound backend -> https://astral.example.com (ws_01…)
 
 - HTTPS REST/JSON（libcurl）；
 - Bearer Token；
-- timeout。
+- timeout；
+- **CLI 身份头（R2 版本协商，phase-5 轮起）**：全部 `/api/v1` 请求经
+  `auth::stampClientHeaders` 携带 `X-Astral-Client: cli` 与
+  `X-Astral-Client-Version: <kProtocolVersion>`（业务命令、whoami/init、
+  device flow 轮询、token refresh 全覆盖）；发现门（§5）按
+  `min_cli_protocol_version` 下限自查——高于本 CLI 的 protocol_version
+  只要下限覆盖就兼容，服务端对低版本头的 400
+  `CLIENT_VERSION_UNSUPPORTED` 经既有错误映射落 exit 9。
 
 **未实装**（规划项，勿当现状依赖）：请求级 request ID 头、bounded retry、
 bounded retry（`event listen` 已具备退避重连 + Last-Event-ID 续传；
 其余命令为单次调用）。业务命令的写请求已在应用层携带确定性
-Idempotency-Key（msg send）。
+Idempotency-Key（msg send、document push）。
 
 401 处理顺序（已实装，`withLazyRefresh`）：
 

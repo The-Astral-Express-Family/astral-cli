@@ -29,8 +29,9 @@ struct PageFlags {
     bool all = false;
 };
 
-inline void addPageFlags(CLI::App& app, PageFlags& flags) {
-    app.add_option("--limit", flags.limit, "Page size (server max 200)");
+inline void addPageFlags(CLI::App& app, PageFlags& flags,
+                         const char* limitHelp = "Page size (server max 200)") {
+    app.add_option("--limit", flags.limit, limitHelp);
     app.add_flag("--all", flags.all, "Follow next_cursor until exhausted");
 }
 

@@ -61,6 +61,7 @@ platform::LoginSession runDeviceFlow(const std::string& serverUrl, const HttpFn&
     create.method = "POST";
     create.url = api + "/auth/device/authorizations";
     create.body = R"({"client_type":"cli"})";
+    stampClientHeaders(create);
     const client::HttpResponse created = http(create);
     if (created.status != 201) {
         throwProtocol("device authorization returned status " + std::to_string(created.status));
@@ -96,6 +97,7 @@ platform::LoginSession runDeviceFlow(const std::string& serverUrl, const HttpFn&
         request.method = "POST";
         request.url = api + "/auth/device/authorizations/" + deviceCode + "/token";
         request.body = "{}";
+        stampClientHeaders(request);
         const client::HttpResponse response = http(request);
 
         if (response.status == 200) {

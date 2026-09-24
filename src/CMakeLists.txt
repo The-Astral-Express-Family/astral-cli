@@ -8,6 +8,7 @@ add_library(astral_core STATIC
   client/http_client.cpp
   client/sse.cpp
   commands/doctor_cmd.cpp
+  commands/document_cmd.cpp
   commands/event_cmd.cpp
   commands/init_cmd.cpp
   commands/login_cmd.cpp
@@ -17,6 +18,7 @@ add_library(astral_core STATIC
   commands/tags_cmd.cpp
   commands/todo_cmd.cpp
   commands/version_cmd.cpp
+  core/content_hash.cpp
   core/env.cpp
   core/error.cpp
   core/log.cpp
@@ -29,6 +31,7 @@ add_library(astral_core STATIC
   platform/atomic_file.cpp
   platform/browser.cpp
   platform/credential_store.cpp
+  platform/stdin.cpp
   platform/user_dirs.cpp
   workspace/binding.cpp
   workspace/resolve.cpp
