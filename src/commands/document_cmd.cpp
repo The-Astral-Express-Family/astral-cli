@@ -4,7 +4,8 @@
 //
 // 语义对齐（快照 v2 MANIFEST key_semantics.documents / documents_delete /
 // conflicts）：content_hash = sha256:<hex> 基于原始 UTF-8 bytes（不重写换行）；
-// push 携带确定性 Idempotency-Key（重跑重放首次 2xx，避免伪冲突工件）；
+// push 携带确定性 Idempotency-Key——只由命令行输入派生（缺省=路径+内容，
+// 显式 base 才纳入），重跑同一命令重放首次 2xx，避免伪冲突工件；
 // 409 DOCUMENT_CONFLICT 的 details.conflict_id 提升为可操作的提示。
 #include "commands/document_cmd.hpp"
 
@@ -397,8 +398,19 @@ private:
         const std::string content =
             loadContent(pushFileOpt_->count() > 0, pushFile_, pushBodyOpt_->count() > 0, pushBody_);
         const std::string contentHash = core::sha256ContentHash(content);
+        // Idempotency-Key 只能由命令行可观测的输入决定（E2E 发现：缺省模式
+        // 若把 GET 到的动态 base 纳入 key，重跑同一命令时 base 已随上次成
+        // 功而前移，key 随之改变，重放失效——同内容连续 bump revision，远
+        // 端被他人改动时还会落下不可收回的伪冲突工件）。缺省模式 key=
+        // path|content_hash（同内容重跑必重放）；显式 --base-revision 时
+        // 命令行完整决定基准，base 入 key 依然稳定，且给「同内容强制再
+        // bump」留了显式出口。
+        std::string keySource = pushPath_ + "|" + contentHash;
         const BasePointer base =
             resolveBasePointer(api, ws.workspaceId, encoded, pushBaseRevision_, pushBaseHash_);
+        if (pushBaseRevision_) {
+            keySource += "|" + std::to_string(base.revision) + "|" + base.hash;
+        }
 
         json body{{"base_revision", base.revision},
                   {"base_hash", base.hash},
@@ -409,12 +421,7 @@ private:
         request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/documents/" + encoded);
         request.body = body.dump();
         request.headers.emplace_back("Content-Type", "application/json");
-        // 重跑同一命令重放首次 2xx：无此 key 时，成功后的重复 push 会以
-        // 失配 base 命中 409 并在服务端落下伪冲突工件（副作用不可收回）。
-        request.headers.emplace_back("Idempotency-Key",
-                                     "doc-" + core::fnv1aHex(pushPath_ + "|" +
-                                                             std::to_string(base.revision) + "|" +
-                                                             base.hash + "|" + contentHash));
+        request.headers.emplace_back("Idempotency-Key", "doc-" + core::fnv1aHex(keySource));
         const client::HttpResponse response = api.send(std::move(request));
         if (response.status == 409) {
             throwConflictHint(response, "document push");

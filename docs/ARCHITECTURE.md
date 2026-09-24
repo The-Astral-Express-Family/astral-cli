@@ -127,9 +127,13 @@ astral document conflicts resolve <id> --resolution ours|theirs|merged|manual [-
   同款节拍）；显式 `--base-revision 0` = 创建/复活（tombstone 行 push
   base 0 即复活）；`--base-revision >0` 必须带 `--base-hash`。404 或
   tombstone 都归零为 base 0。
-- **Idempotency-Key**：push 携带确定性 key（`doc-` + fnv1a(path|base_rev|
-  base_hash|content_hash)）——重跑同一命令重放首次 2xx；无 key 的重复
-  push 会以失配 base 命中 409 并在服务端落下**不可收回的伪冲突工件**。
+- **Idempotency-Key**：push 携带确定性 key，**只由命令行可观测输入派生**——
+  缺省（GET-改-写）模式 = `doc-` + fnv1a(path|content_hash)；显式
+  `--base-revision` 时才纳入 base（命令行完整决定基准，重跑同样稳定）。
+  重跑同一命令重放首次 2xx（E2E 验证：三连推 revision 稳定）。key 若随
+  GET 到的动态 base 变化，重跑会同内容连续 bump，远端被他人改动时还会
+  落下**不可收回的伪冲突工件**。注意服务端只缓存 2xx：重跑**本就冲突**
+  的命令会累积冲突工件，sync 引擎层需按 path+base 去重提示。
 - **409 DOCUMENT_CONFLICT**：错误 envelope 的 `details.conflict_id` 被提升
   进错误消息（`astral document conflicts show <id>` 提示），exit 5；
   `--json` 仍透传 `error.code=DOCUMENT_CONFLICT` + request_id/retryable。
@@ -541,7 +545,7 @@ Idempotency-Key（msg send、document push）。
 │  ├─ commands/        # 扁平文件，一个顶层名词一个 <noun>_cmd.cpp
 │  │  ├─ login_cmd.cpp
 │  │  ├─ init_cmd.cpp
-│  │  ├─ todo_cmd.cpp / tags_cmd.cpp / msg_cmd.cpp（随实装增加）
+│  │  ├─ todo_cmd.cpp / tags_cmd.cpp / msg_cmd.cpp / document_cmd.cpp / profile_cmd.cpp（随实装增加）
 │  │  └─ registry.cpp
 │  ├─ client/
 │  ├─ auth/
@@ -604,6 +608,8 @@ Linux 需要明确最低 glibc baseline；如确有需求再增加独立 musl �
 - JSON stdout/stderr 契约；
 - regex + fuzzy 参数序列化；
 - tag proposal/confirm；
+- document content_hash 口径（NIST 向量 + CRLF 不重写）、base 指针解析、
+  409 冲突提示、空串选项语义（--body ""/--bio ""）；
 - SSE reconnect；
 - Windows/macOS/Linux build smoke；
 - 与固定 `astral-modulator` protocol snapshot 的 contract test。

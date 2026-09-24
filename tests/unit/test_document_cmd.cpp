@@ -151,10 +151,27 @@ TEST_CASE("document push resolves the base pointer by fetching the current row")
     REQUIRE(body.at("base_hash") == "sha256:" + std::string(64, 'a'));
     REQUIRE(body.at("content") == "# new");
     REQUIRE(body.at("content_hash") == astral::core::sha256ContentHash("# new"));
-    REQUIRE(hasHeader(
-        push, "Idempotency-Key",
-        "doc-" + astral::core::fnv1aHex("notes/demo.md|3|sha256:" + std::string(64, 'a') + "|" +
-                                        body.at("content_hash").get<std::string>())));
+    // 缺省（GET-改-写）模式：key 只由路径+内容决定，**不含动态 base**——
+    // 重跑同一命令时 base 已随上次成功前移，base 入 key 会让重放失效
+    // （E2E 发现：同内容连续 bump revision / 落伪冲突工件）。
+    REQUIRE(hasHeader(push, "Idempotency-Key",
+                      "doc-" + astral::core::fnv1aHex("notes/demo.md|" +
+                                                      body.at("content_hash").get<std::string>())));
+
+    // 远端 revision 变化（他人改动）不影响同内容重跑的 key。
+    json docMoved = kDoc;
+    docMoved["revision"] = 7;
+    fx.fake().route("/documents/notes/demo.md", 200, docMoved);
+    fx.fake().route("/documents/notes/demo.md", 200, docMoved);
+    REQUIRE(runApp({"astral", "document", "push", "notes/demo.md", "--body", "# new"}).exitCode ==
+            0);
+    const client::HttpRequest& pushAgain = fx.fake().requests.back();
+    const json bodyAgain = json::parse(pushAgain.body);
+    REQUIRE(bodyAgain.at("base_revision") == 7); // base 跟随远端前移
+    REQUIRE(hasHeader(pushAgain, "Idempotency-Key",
+                      "doc-" +
+                          astral::core::fnv1aHex("notes/demo.md|" +
+                                                 bodyAgain.at("content_hash").get<std::string>())));
 }
 
 TEST_CASE("document push creates with base 0 when the path is unknown") {
