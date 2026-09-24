@@ -64,6 +64,12 @@ nlohmann::json sendJson(const ApiSession& api, std::string method, const std::st
                         const nlohmann::json& body, const std::string& what,
                         std::vector<std::pair<std::string, std::string>> extraHeaders = {});
 
+// Body-free request shorthand (DELETE lease/tag, bodyless PUT): method is
+// assembled here, then requireSuccess. The raw response comes back unparsed
+// so empty 204 bodies (and bodies the caller must interpret) stay workable.
+client::HttpResponse sendNoBody(const ApiSession& api, std::string method, const std::string& path,
+                                const std::string& what);
+
 // Session-authenticated GET/POST for the human-only commands (whoami, init):
 // unlike ApiSession these deliberately never honor ASTRAL_TOKEN — binding a
 // workspace or asking "who am I" must act as the logged-in human, not an

@@ -124,6 +124,14 @@ nlohmann::json sendJson(const ApiSession& api, std::string method, const std::st
     return json::parse(api.requireSuccess(std::move(request), what).body);
 }
 
+client::HttpResponse sendNoBody(const ApiSession& api, std::string method, const std::string& path,
+                                const std::string& what) {
+    client::HttpRequest request;
+    request.method = std::move(method);
+    request.url = apiUrl(api, path);
+    return api.requireSuccess(std::move(request), what);
+}
+
 client::HttpResponse sessionGet(platform::CredentialStore& store, platform::LoginSession& session,
                                 const std::string& url) {
     const HttpFn http = commandHttp();
