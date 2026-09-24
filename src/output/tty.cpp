@@ -40,6 +40,10 @@ bool stderrIsTty() {
 
 void enableNativeAnsi() {
 #ifdef _WIN32
+    // 控制台输出代码页切 UTF-8：stdout 全线输出 UTF-8 字节（协议/文档内容），
+    // 保持默认 ACP 代码页时 conhost 会把中文渲染成乱码。重定向到管道时该
+    // 调用无效但无害。
+    SetConsoleOutputCP(65001);
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     if (handle == INVALID_HANDLE_VALUE) {
         return;

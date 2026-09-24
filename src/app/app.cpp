@@ -17,6 +17,7 @@
 #include "output/json_output.hpp"
 #include "output/style.hpp"
 #include "output/tty.hpp"
+#include "platform/args.hpp"
 
 namespace astral::app {
 
@@ -131,7 +132,15 @@ int runMain(int argc, char** argv) {
 #ifdef _WIN32
     output::enableNativeAnsi();
 #endif
-    return runApp(argc, argv, std::cout, std::cerr);
+    // argv 归一 UTF-8（Windows ANSI 代码页防御；见 platform/args.hpp）。
+    // 单测直接调 runApp 注入 UTF-8 字符串，不经此层。
+    std::vector<std::string> utf8Args = platform::argsToUtf8(argc, argv);
+    std::vector<char*> owned;
+    owned.reserve(utf8Args.size());
+    for (std::string& arg : utf8Args) {
+        owned.push_back(arg.data());
+    }
+    return runApp(static_cast<int>(owned.size()), owned.data(), std::cout, std::cerr);
 }
 
 } // namespace astral::app

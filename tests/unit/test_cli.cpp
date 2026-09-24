@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "core/exit_codes.hpp"
+#include "platform/args.hpp"
 #include "support/api_fixture.hpp"
 
 namespace {
@@ -12,6 +14,22 @@ namespace {
 // runApp/RunResult 来自 tests/unit/support/api_fixture.hpp——本文件只覆盖
 // 本地行为（version/usage/stub/doctor），不需要 ApiFixture 的网络桩。
 using astral_test::runApp;
+
+TEST_CASE("argsToUtf8 keeps valid UTF-8 verbatim and preserves argc") {
+    // 合法 UTF-8（含中文/emoji）必须字节级透传——Git Bash/管道传入的已是
+    // UTF-8，任何重编码都可能破坏内容 hash 等下游口径。ACP 转换分支依赖
+    // 本机代码页，只能由 E2E（GBK ACP 机器）覆盖，不做跨平台单测。
+    char arg0[] = "astral";
+    char arg1[] = "todo";
+    char arg2[] = "add";
+    char arg3[] = "中文任务 🎉";
+    char arg4[] = "";
+    char* raw[] = {arg0, arg1, arg2, arg3, arg4};
+    const std::vector<std::string> args = astral::platform::argsToUtf8(5, raw);
+    REQUIRE(args.size() == 5);
+    REQUIRE(args[3] == "中文任务 🎉");
+    REQUIRE(args[4].empty());
+}
 
 TEST_CASE("astral version prints human output and exits 0") {
     const auto result = runApp({"astral", "version"});
