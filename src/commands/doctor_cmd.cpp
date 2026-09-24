@@ -127,10 +127,13 @@ private:
                 }
             }
             try {
-                const auto servers = store->list();
-                detail += servers.empty()
+                // login writes the sessions slot; the servers slot (agent
+                // credentials) has no producer wired yet, so counting it
+                // alone reports a false "no stored credentials".
+                const auto sessions = store->listSessions();
+                detail += sessions.empty()
                               ? ", no stored credentials"
-                              : ", " + std::to_string(servers.size()) + " server(s) logged in";
+                              : ", " + std::to_string(sessions.size()) + " server(s) logged in";
             } catch (const core::AstralError& e) {
                 status = "warn";
                 detail += std::string(" (") + e.what() + ")";
