@@ -14,8 +14,8 @@ struct TargetSpec {
     std::string fullUrl;
 
     // The server URL with the workspace segment removed (nullopt when the
-    // input had no split point). informational; init only consumes fullUrl +
-    // workspaceName.
+    // input had no split point). init consumes it for discovery (falling
+    // back to fullUrl when no split happened, i.e. explicit --workspace).
     std::optional<std::string> urlAfterSplit;
 
     // The split-off segment, present only when urlAfterSplit is set or when

@@ -51,7 +51,12 @@ public:
         }
 
         // 1. Discovery + session (init requires an authenticated human).
-        const auth::ServerInfo server = auth::discoverServer(spec.fullUrl, auth::realHttp());
+        // Discovery runs on the server URL with the workspace segment split
+        // off (ARCHITECTURE.md 9.3); with an explicit --workspace there was
+        // no split, so the whole (normalized) input is the server URL.
+        // commandHttp() = realHttp() outside tests (same seam as login/logout).
+        const auth::ServerInfo server =
+            auth::discoverServer(spec.urlAfterSplit.value_or(spec.fullUrl), auth::commandHttp());
         auto store = platform::makeDefaultCredentialStore();
         platform::LoginSession session = auth::requireSession(*store, server.baseUrl);
         const std::string api = server.origin() + server.apiBase;

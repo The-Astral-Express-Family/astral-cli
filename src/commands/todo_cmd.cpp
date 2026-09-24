@@ -1,5 +1,6 @@
 #include "commands/todo_cmd.hpp"
 
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -146,6 +147,45 @@ void printTaskDetail(std::ostream& out, const Painter& paint, const json& task) 
     }
 }
 
+// tag attach/detach 的 <tag> 参数解析，沿用 tags_cmd 的词典惯例（其
+// resolveTag 是文件内私有，此处同规则实现）：`tag_` 前缀直接当 id；否则对
+// GET /workspaces/{id}/tags 的词典做规范化名匹配（服务端 NFKC+lowercase，
+// 覆盖纯 ASCII 的 CLI 输入），找不到本地报 NotFound。
+struct TagRef {
+    std::string id;
+    std::string name;
+};
+
+TagRef resolveTagRef(const auth::ApiSession& api, const auth::WorkspaceContext& ws,
+                     const std::string& nameOrId) {
+    if (nameOrId.rfind("tag_", 0) == 0) {
+        return TagRef{nameOrId, ""};
+    }
+    client::HttpRequest request;
+    request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/tags");
+    const json page = json::parse(api.requireSuccess(std::move(request), "tag list").body);
+    std::string lower;
+    lower.reserve(nameOrId.size());
+    for (char c : nameOrId) {
+        lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (const auto it = page.find("items"); it != page.end() && it->is_array()) {
+        for (const auto& tag : *it) {
+            const std::string name = scalarOr(tag, "name");
+            std::string candidate;
+            candidate.reserve(name.size());
+            for (char c : name) {
+                candidate += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            if (candidate == lower) {
+                return TagRef{scalarOr(tag, "id"), name};
+            }
+        }
+    }
+    throw core::AstralError(core::Errc::NotFound,
+                            "tag '" + nameOrId + "' not found in this workspace");
+}
+
 // ---- the noun -----------------------------------------------------------
 
 class TodoCommand final : public Command {
@@ -196,6 +236,41 @@ public:
         done->add_option("--revision", revision_,
                          "Expected revision (default: read the task's current revision)");
 
+        CLI::App* update = app.add_subcommand("update", "Update task fields (optimistic concurrency)");
+        update->add_option("task_id", taskId_, "Task id")->required();
+        update->add_option("--title", title_, "New task title");
+        update->add_option("--description", description_, "New task description");
+        update->add_option("--status", status_, "New task status")
+            ->check(CLI::IsMember(
+                std::vector<std::string>{std::begin(kTaskStatuses), std::end(kTaskStatuses)}));
+        update->add_option("--priority", priority_, "New task priority")
+            ->check(CLI::IsMember(
+                std::vector<std::string>{std::begin(kTaskPriorities), std::end(kTaskPriorities)}));
+        update->add_option("--assignee", assigneeUpdate_,
+                           "New assignee actor id ('-' clears the assignee)");
+        update->add_option("--revision", revision_,
+                           "Expected revision (default: read the task's current revision)");
+
+        // v2 lease 管理：renew 仅 holder 可续；release 主动让出（204 无响应体）。
+        CLI::App* lease = app.add_subcommand("lease", "Manage the lease on a claimed task");
+        lease->require_subcommand(1);
+        CLI::App* renew =
+            lease->add_subcommand("renew", "Renew a lease you hold (holder only)");
+        renew->add_option("task_id", taskId_, "Task id")->required();
+        CLI::App* release =
+            lease->add_subcommand("release", "Release a lease you hold");
+        release->add_option("task_id", taskId_, "Task id")->required();
+
+        // v2 tag 挂载/摘除：幂等语义服务端保证（D11），<tag> 为词典名或 tag_ id。
+        CLI::App* tag = app.add_subcommand("tag", "Attach or detach workspace tags on a task");
+        tag->require_subcommand(1);
+        CLI::App* attach = tag->add_subcommand("attach", "Attach a tag to a task (idempotent)");
+        attach->add_option("task_id", taskId_, "Task id")->required();
+        attach->add_option("tag", tagArg_, "Tag name or tag_ id")->required();
+        CLI::App* detach = tag->add_subcommand("detach", "Detach a tag from a task (idempotent)");
+        detach->add_option("task_id", taskId_, "Task id")->required();
+        detach->add_option("tag", tagArg_, "Tag name or tag_ id")->required();
+
         // v2：平面查询走 task-search，结构化（tag/status/assignee）与内容
         // （regex/fuzzy）平权，至少一个条件。
         CLI::App* search = app.add_subcommand(
@@ -212,6 +287,13 @@ public:
         claimSub_ = claim;
         doneSub_ = done;
         searchSub_ = search;
+        updateSub_ = update;
+        leaseSub_ = lease;
+        leaseRenewSub_ = renew;
+        leaseReleaseSub_ = release;
+        tagSub_ = tag;
+        tagAttachSub_ = attach;
+        tagDetachSub_ = detach;
     }
 
     int execute(const CommandContext& context) override {
@@ -232,6 +314,27 @@ public:
         }
         if (node_->got_subcommand(searchSub_)) {
             return runSearch(context);
+        }
+        if (node_->got_subcommand(updateSub_)) {
+            return runUpdate(context);
+        }
+        if (node_->got_subcommand(leaseSub_)) {
+            if (leaseSub_->got_subcommand(leaseRenewSub_)) {
+                return runLeaseRenew(context);
+            }
+            if (leaseSub_->got_subcommand(leaseReleaseSub_)) {
+                return runLeaseRelease(context);
+            }
+            throw core::AstralError(core::Errc::Usage, "no todo lease subcommand selected");
+        }
+        if (node_->got_subcommand(tagSub_)) {
+            if (tagSub_->got_subcommand(tagAttachSub_)) {
+                return runTagAttach(context);
+            }
+            if (tagSub_->got_subcommand(tagDetachSub_)) {
+                return runTagDetach(context);
+            }
+            throw core::AstralError(core::Errc::Usage, "no todo tag subcommand selected");
         }
         throw core::AstralError(core::Errc::Usage, "no todo subcommand selected");
     }
@@ -297,9 +400,9 @@ private:
         appendParam(query, "tag", tag_);
         appendParam(query, "assignee", assignee_);
         std::string nextCursor;
-        const json items = auth::fetchPageItems(
-            api, "/workspaces/" + ws.workspaceId + "/task-search", std::move(query),
-            pageFlags_.paging.all, "task search", nextCursor);
+        const json items =
+            auth::fetchPageItems(api, "/workspaces/" + ws.workspaceId + "/task-search",
+                                 std::move(query), pageFlags_.paging.all, "task search", nextCursor);
 
         if (context.json) {
             printPageJson(context.out, ws.workspaceId, items, nextCursor);
@@ -396,6 +499,123 @@ private:
         return 0;
     }
 
+    int runUpdate(const CommandContext& context) {
+        // --revision 只是并发参数：至少要一个可变字段，否则本地 USAGE。
+        if (title_.empty() && description_.empty() && status_.empty() && priority_.empty() &&
+            !assigneeUpdate_) {
+            throw core::AstralError(
+                core::Errc::Usage,
+                "todo update needs at least one of "
+                "--title/--description/--status/--priority/--assignee");
+        }
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        json body{{"expected_revision", expectedRevision(api)}};
+        if (!title_.empty()) {
+            body["title"] = title_;
+        }
+        if (!description_.empty()) {
+            body["description"] = description_;
+        }
+        if (!status_.empty()) {
+            body["status"] = status_;
+        }
+        if (!priority_.empty()) {
+            body["priority"] = priority_;
+        }
+        if (assigneeUpdate_) {
+            // 字面 "-" 表示置空（assignee_actor_id: null）。
+            body["assignee_actor_id"] = *assigneeUpdate_ == "-" ? json(nullptr) : json(*assigneeUpdate_);
+        }
+        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
+
+        if (context.json) {
+            output::printJson(context.out, task);
+            return 0;
+        }
+        context.out << "Updated " << taskId_ << " (revision " << scalarOr(task, "revision") << ")\n";
+        return 0;
+    }
+
+    int runLeaseRenew(const CommandContext& context) {
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        // 协议无 requestBody，带 body 反而不洁：走无 body 请求。
+        const client::HttpResponse response = auth::sendNoBody(
+            api, "POST", "/tasks/" + taskId_ + "/lease/renew", "lease renew");
+        const json lease = json::parse(response.body);
+
+        if (context.json) {
+            output::printJson(context.out, lease); // Lease verbatim
+            return 0;
+        }
+        context.out << "Renewed " << taskId_ << " lease - holder "
+                    << scalarOr(lease, "holder_actor_id") << " until "
+                    << scalarOr(lease, "expires_at") << '\n';
+        return 0;
+    }
+
+    int runLeaseRelease(const CommandContext& context) {
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/lease", "lease release");
+
+        if (context.json) {
+            // 204 无响应体：--json 侧的确认单对象是 CLI 呈现，非服务端原样。
+            output::printJson(context.out, json{{"released", true}, {"task_id", taskId_}});
+            return 0;
+        }
+        context.out << "Released lease on " << taskId_ << '\n';
+        return 0;
+    }
+
+    int runTagAttach(const CommandContext& context) {
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        const TagRef tag = resolveTagRef(api, ws, tagArg_);
+        // 不带 body（expected_revision 可选）：幂等挂载由服务端保证，不 bump revision。
+        const client::HttpResponse response = auth::sendNoBody(
+            api, "PUT", "/tasks/" + taskId_ + "/tags/" + tag.id, "task tag attach");
+        const json task = json::parse(response.body);
+
+        if (context.json) {
+            output::printJson(context.out, task); // Task（含 tags）verbatim
+            return 0;
+        }
+        context.out << "Attached " << (tag.name.empty() ? tag.id : tag.name) << " to " << taskId_
+                    << '\n';
+        return 0;
+    }
+
+    int runTagDetach(const CommandContext& context) {
+        // One session per run: discovery exactly once; unresolvable targets get the
+        // D14 default-workspace hint from openWorkspace.
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        const TagRef tag = resolveTagRef(api, ws, tagArg_);
+        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/tags/" + tag.id,
+                         "task tag detach");
+
+        if (context.json) {
+            // 204 无响应体（含未挂载的幂等路径）：确认单对象为 CLI 呈现。
+            output::printJson(context.out, json{{"detached", true},
+                                                {"task_id", taskId_},
+                                                {"tag_id", tag.id}});
+            return 0;
+        }
+        context.out << "Detached " << (tag.name.empty() ? tag.id : tag.name) << " from " << taskId_
+                    << '\n';
+        return 0;
+    }
+
     CLI::App* node_ = nullptr;
     CLI::App* listSub_ = nullptr;
     CLI::App* addSub_ = nullptr;
@@ -403,6 +623,13 @@ private:
     CLI::App* claimSub_ = nullptr;
     CLI::App* doneSub_ = nullptr;
     CLI::App* searchSub_ = nullptr;
+    CLI::App* updateSub_ = nullptr;
+    CLI::App* leaseSub_ = nullptr;
+    CLI::App* leaseRenewSub_ = nullptr;
+    CLI::App* leaseReleaseSub_ = nullptr;
+    CLI::App* tagSub_ = nullptr;
+    CLI::App* tagAttachSub_ = nullptr;
+    CLI::App* tagDetachSub_ = nullptr;
 
     TaskPageFlags pageFlags_;
     std::string assignee_;
@@ -417,6 +644,9 @@ private:
     std::string regex_;
     std::string fuzzy_;
     std::string tag_;
+    std::string status_;
+    std::optional<std::string> assigneeUpdate_;
+    std::string tagArg_;
 };
 
 } // namespace

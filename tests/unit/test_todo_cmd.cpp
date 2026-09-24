@@ -415,4 +415,264 @@ TEST_CASE("todo add without any target carries the D14 default-workspace hint") 
     // Human output (stderr) surfaces the D14 convention hint.
     REQUIRE(result.err.find("default/<your-name>/todo") != std::string::npos);
 }
+
+// ---- update / lease / tag（协议 v2 扩展面） --------------------------------
+
+const json kLease = json{{"holder_actor_id", "usr_1"},
+                         {"expires_at", "2026-09-10T01:05:00Z"},
+                         {"renewed_at", "2026-09-10T01:00:00Z"}};
+
+const json kTagPage = json{
+    {"items", json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}})},
+    {"next_cursor", nullptr}};
+
+json taskWithTags() {
+    json task = kTaskOne;
+    task["tags"] =
+        json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}});
+    return task;
+}
+
+TEST_CASE("todo update patches mutable fields with optimistic concurrency") {
+    ApiFixture fx;
+    json updated = kTaskOne;
+    updated["title"] = "New title";
+    updated["priority"] = "low";
+    updated["assignee_actor_id"] = "usr_2";
+    updated["revision"] = 4;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, updated);  // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "update", "task_1", "--title",
+                                     "New title", "--priority", "low", "--assignee", "usr_2",
+                                     "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload == updated);
+
+    const client::HttpRequest& patch = fx.fake().requests.back();
+    REQUIRE(patch.method == "PATCH");
+    const json body = json::parse(patch.body);
+    REQUIRE(body.at("expected_revision") == 3);
+    REQUIRE(body.at("title") == "New title");
+    REQUIRE(body.at("priority") == "low");
+    REQUIRE(body.at("assignee_actor_id") == "usr_2");
+    // Untouched fields stay absent (partial update semantics).
+    REQUIRE_FALSE(body.contains("description"));
+    REQUIRE_FALSE(body.contains("status"));
+}
+
+TEST_CASE("todo update --revision skips the lookup and pins the body") {
+    ApiFixture fx;
+    json updated = kTaskOne;
+    updated["status"] = "blocked";
+    updated["revision"] = 10;
+    fx.fake().route("/tasks/task_1", 200, updated);
+
+    const RunResult result =
+        runApp({"astral", "todo", "update", "task_1", "--status", "blocked", "--revision", "9",
+                "--json"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(fx.fake().requests.size() == 2); // well-known + PATCH only
+
+    const json body = json::parse(fx.fake().requests.back().body);
+    REQUIRE(body.at("expected_revision") == 9);
+    REQUIRE(body.at("status") == "blocked");
+}
+
+TEST_CASE("todo update --assignee - clears the assignee with null") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne);
+
+    const RunResult result = runApp(
+        {"astral", "todo", "update", "task_1", "--assignee", "-", "--revision", "9", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json body = json::parse(fx.fake().requests.back().body);
+    REQUIRE(body.at("assignee_actor_id").is_null());
+}
+
+TEST_CASE("todo update without mutable fields is a usage error") {
+    ApiFixture fx;
+    const RunResult result = runApp({"astral", "todo", "update", "task_1", "--json"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("error").at("code") == "USAGE");
+}
+
+TEST_CASE("todo update conflict surfaces the REVISION_CONFLICT protocol code") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1", 409,
+                    json::parse(errorEnvelopeBody("REVISION_CONFLICT", "stale revision", false,
+                                                  "req_rev")));
+
+    const RunResult result = runApp(
+        {"astral", "todo", "update", "task_1", "--title", "x", "--revision", "3", "--json"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Conflict));
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("error").at("code") == "REVISION_CONFLICT");
+    REQUIRE(payload.at("error").at("request_id") == "req_rev");
+}
+
+TEST_CASE("todo lease renew posts bodyless and prints the lease verbatim") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
+
+    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload == kLease);
+
+    const client::HttpRequest& renew = fx.fake().requests.back();
+    REQUIRE(renew.method == "POST");
+    REQUIRE(renew.url.find("/tasks/task_1/lease/renew") != std::string::npos);
+    REQUIRE(renew.body.empty()); // the endpoint takes no requestBody
+}
+
+TEST_CASE("todo lease renew human output names holder and expiry") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
+
+    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Renewed task_1 lease") == 0);
+    REQUIRE(result.out.find("usr_1") != std::string::npos);
+    REQUIRE(result.out.find("2026-09-10T01:05:00Z") != std::string::npos);
+    REQUIRE(result.out.find('\x1b') == std::string::npos);
+}
+
+TEST_CASE("todo lease renew expired surfaces TASK_LEASE_EXPIRED") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/lease/renew", 409,
+                    json::parse(errorEnvelopeBody("TASK_LEASE_EXPIRED", "lease expired, re-claim",
+                                                  false, "req_lease")));
+
+    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Conflict));
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("error").at("code") == "TASK_LEASE_EXPIRED");
+}
+
+TEST_CASE("todo lease release deletes the lease and confirms with one object") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/lease", 204, json::object()); // empty 204 body
+
+    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("released") == true);
+    REQUIRE(payload.at("task_id") == "task_1");
+
+    const client::HttpRequest& release = fx.fake().requests.back();
+    REQUIRE(release.method == "DELETE");
+    REQUIRE(release.url.find("/tasks/task_1/lease") != std::string::npos);
+}
+
+TEST_CASE("todo lease release human output prints one confirmation line") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/lease", 204, json::object());
+
+    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Released lease on task_1") == 0);
+}
+
+TEST_CASE("todo lease without a subcommand is a usage error") {
+    ApiFixture fx;
+    const RunResult result = runApp({"astral", "todo", "lease"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+}
+
+TEST_CASE("todo tag without a subcommand is a usage error") {
+    ApiFixture fx;
+    const RunResult result = runApp({"astral", "todo", "tag"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+}
+
+TEST_CASE("todo tag attach resolves the tag name via the workspace dictionary") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/tags", 200, kTagPage);
+    fx.fake().route("/tasks/task_1/tags/tag_9", 200, taskWithTags());
+
+    const RunResult result =
+        runApp({"astral", "todo", "tag", "attach", "task_1", "auth", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("tags").at(0).at("id") == "tag_9");
+
+    const client::HttpRequest& attach = fx.fake().requests.back();
+    REQUIRE(attach.method == "PUT");
+    REQUIRE(attach.url.find("/tasks/task_1/tags/tag_9") != std::string::npos);
+    REQUIRE(attach.body.empty()); // idempotent attach sends no body
+}
+
+TEST_CASE("todo tag attach with a tag_ id skips the dictionary lookup") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/tags/tag_9", 200, taskWithTags());
+
+    const RunResult result =
+        runApp({"astral", "todo", "tag", "attach", "task_1", "tag_9", "--json"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(fx.fake().requests.size() == 2); // well-known + PUT only
+
+    REQUIRE(fx.fake().requests.back().url.find("/tasks/task_1/tags/tag_9") != std::string::npos);
+}
+
+TEST_CASE("todo tag attach human output names the resolved tag") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/tags", 200, kTagPage);
+    fx.fake().route("/tasks/task_1/tags/tag_9", 200, taskWithTags());
+
+    const RunResult result = runApp({"astral", "todo", "tag", "attach", "task_1", "auth"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Attached auth to task_1") == 0);
+    REQUIRE(result.out.find('\x1b') == std::string::npos);
+}
+
+TEST_CASE("todo tag attach with an unknown name is a local NotFound") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/tags", 200, kTagPage);
+
+    const RunResult result =
+        runApp({"astral", "todo", "tag", "attach", "task_1", "nope", "--json"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::NotFound));
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("error").at("code") == "NOT_FOUND");
+}
+
+TEST_CASE("todo tag detach deletes idempotently and confirms with one object") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/tags", 200, kTagPage);
+    fx.fake().route("/tasks/task_1/tags/tag_9", 204, json::object()); // empty 204 body
+
+    const RunResult result =
+        runApp({"astral", "todo", "tag", "detach", "task_1", "auth", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("detached") == true);
+    REQUIRE(payload.at("task_id") == "task_1");
+    REQUIRE(payload.at("tag_id") == "tag_9");
+
+    const client::HttpRequest& detach = fx.fake().requests.back();
+    REQUIRE(detach.method == "DELETE");
+    REQUIRE(detach.url.find("/tasks/task_1/tags/tag_9") != std::string::npos);
+}
+
+TEST_CASE("todo tag detach human output names the resolved tag") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/tags", 200, kTagPage);
+    fx.fake().route("/tasks/task_1/tags/tag_9", 204, json::object());
+
+    const RunResult result = runApp({"astral", "todo", "tag", "detach", "task_1", "auth"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Detached auth from task_1") == 0);
+}
 } // namespace
