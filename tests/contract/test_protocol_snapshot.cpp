@@ -53,7 +53,9 @@ nlohmann::json snapshotJson(const char* name) {
 
 TEST_CASE("documents endpoints are pinned in the frozen snapshot") {
     const std::string openapi = snapshotFile("openapi.yaml");
-    for (const std::string& needle : {
+    // 按值迭代 const char* 初始化列表：const std::string& 绑定 const char*
+    // 临时量会触发 gcc 的 -Wrange-loop-construct（CI -Werror）。
+    for (const char* const needle : {
              "/workspaces/{workspace_id}/documents/manifest:",
              "/workspaces/{workspace_id}/documents/{path}:",
              "/workspaces/{workspace_id}/conflicts:",

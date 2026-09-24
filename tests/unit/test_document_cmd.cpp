@@ -334,7 +334,9 @@ TEST_CASE("document conflicts list, show and resolve") {
 
 TEST_CASE("document paths are validated and encoded per segment") {
     ApiFixture fx;
-    for (const std::string& bad :
+    // 按值迭代 const char* 初始化列表：const std::string& 绑定 const char*
+    // 临时量会触发 gcc 的 -Wrange-loop-construct（CI -Werror）。
+    for (const char* const bad :
          {"notes//a.md", "/abs.md", "notes/../secrets.md", "notes\\a.md", "notes/."}) {
         const RunResult result = runApp({"astral", "document", "get", bad, "--json"});
         INFO("path: " << bad);
