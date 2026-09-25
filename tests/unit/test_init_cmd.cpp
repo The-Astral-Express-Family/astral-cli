@@ -37,12 +37,10 @@ TEST_CASE("init shorthand discovers well-known on the split server URL") {
 TEST_CASE("init with explicit --workspace discovers on the whole input") {
     ApiFixture fx;
     fx.installSession();
-    fx.fake().route("/workspaces?name=other", 200,
-                    json{{"items", json::array({kWorkspace})}});
+    fx.fake().route("/workspaces?name=other", 200, json{{"items", json::array({kWorkspace})}});
     fx.fake().route("/workspaces/ws_1", 200, kWorkspace);
 
-    const RunResult result =
-        runApp({"astral", "init", "https://api.test", "--workspace", "other"});
+    const RunResult result = runApp({"astral", "init", "https://api.test", "--workspace", "other"});
     REQUIRE(result.exitCode == 0);
     REQUIRE_FALSE(fx.fake().requests.empty());
     // 无拆分点（显式 --workspace）时回退 fullUrl，同样不得崩在空 urlAfterSplit。

@@ -428,8 +428,7 @@ const json kTagPage = json{
 
 json taskWithTags() {
     json task = kTaskOne;
-    task["tags"] =
-        json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}});
+    task["tags"] = json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}});
     return task;
 }
 
@@ -443,9 +442,8 @@ TEST_CASE("todo update patches mutable fields with optimistic concurrency") {
     fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
     fx.fake().route("/tasks/task_1", 200, updated);  // PATCH reply
 
-    const RunResult result = runApp({"astral", "todo", "update", "task_1", "--title",
-                                     "New title", "--priority", "low", "--assignee", "usr_2",
-                                     "--json"});
+    const RunResult result = runApp({"astral", "todo", "update", "task_1", "--title", "New title",
+                                     "--priority", "low", "--assignee", "usr_2", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
@@ -470,9 +468,8 @@ TEST_CASE("todo update --revision skips the lookup and pins the body") {
     updated["revision"] = 10;
     fx.fake().route("/tasks/task_1", 200, updated);
 
-    const RunResult result =
-        runApp({"astral", "todo", "update", "task_1", "--status", "blocked", "--revision", "9",
-                "--json"});
+    const RunResult result = runApp(
+        {"astral", "todo", "update", "task_1", "--status", "blocked", "--revision", "9", "--json"});
     REQUIRE(result.exitCode == 0);
     REQUIRE(fx.fake().requests.size() == 2); // well-known + PATCH only
 
@@ -503,12 +500,12 @@ TEST_CASE("todo update without mutable fields is a usage error") {
 
 TEST_CASE("todo update conflict surfaces the REVISION_CONFLICT protocol code") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1", 409,
-                    json::parse(errorEnvelopeBody("REVISION_CONFLICT", "stale revision", false,
-                                                  "req_rev")));
+    fx.fake().route(
+        "/tasks/task_1", 409,
+        json::parse(errorEnvelopeBody("REVISION_CONFLICT", "stale revision", false, "req_rev")));
 
-    const RunResult result = runApp(
-        {"astral", "todo", "update", "task_1", "--title", "x", "--revision", "3", "--json"});
+    const RunResult result =
+        runApp({"astral", "todo", "update", "task_1", "--title", "x", "--revision", "3", "--json"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Conflict));
 
     const json payload = json::parse(result.out);

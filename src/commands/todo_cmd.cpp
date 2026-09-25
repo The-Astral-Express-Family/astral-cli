@@ -236,7 +236,8 @@ public:
         done->add_option("--revision", revision_,
                          "Expected revision (default: read the task's current revision)");
 
-        CLI::App* update = app.add_subcommand("update", "Update task fields (optimistic concurrency)");
+        CLI::App* update =
+            app.add_subcommand("update", "Update task fields (optimistic concurrency)");
         update->add_option("task_id", taskId_, "Task id")->required();
         update->add_option("--title", title_, "New task title");
         update->add_option("--description", description_, "New task description");
@@ -254,11 +255,9 @@ public:
         // v2 lease 管理：renew 仅 holder 可续；release 主动让出（204 无响应体）。
         CLI::App* lease = app.add_subcommand("lease", "Manage the lease on a claimed task");
         lease->require_subcommand(1);
-        CLI::App* renew =
-            lease->add_subcommand("renew", "Renew a lease you hold (holder only)");
+        CLI::App* renew = lease->add_subcommand("renew", "Renew a lease you hold (holder only)");
         renew->add_option("task_id", taskId_, "Task id")->required();
-        CLI::App* release =
-            lease->add_subcommand("release", "Release a lease you hold");
+        CLI::App* release = lease->add_subcommand("release", "Release a lease you hold");
         release->add_option("task_id", taskId_, "Task id")->required();
 
         // v2 tag 挂载/摘除：幂等语义服务端保证（D11），<tag> 为词典名或 tag_ id。
@@ -503,10 +502,9 @@ private:
         // --revision 只是并发参数：至少要一个可变字段，否则本地 USAGE。
         if (title_.empty() && description_.empty() && status_.empty() && priority_.empty() &&
             !assigneeUpdate_) {
-            throw core::AstralError(
-                core::Errc::Usage,
-                "todo update needs at least one of "
-                "--title/--description/--status/--priority/--assignee");
+            throw core::AstralError(core::Errc::Usage,
+                                    "todo update needs at least one of "
+                                    "--title/--description/--status/--priority/--assignee");
         }
         // One session per run: discovery exactly once; unresolvable targets get the
         // D14 default-workspace hint from openWorkspace.
@@ -527,7 +525,8 @@ private:
         }
         if (assigneeUpdate_) {
             // 字面 "-" 表示置空（assignee_actor_id: null）。
-            body["assignee_actor_id"] = *assigneeUpdate_ == "-" ? json(nullptr) : json(*assigneeUpdate_);
+            body["assignee_actor_id"] =
+                *assigneeUpdate_ == "-" ? json(nullptr) : json(*assigneeUpdate_);
         }
         const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
 
@@ -535,7 +534,8 @@ private:
             output::printJson(context.out, task);
             return 0;
         }
-        context.out << "Updated " << taskId_ << " (revision " << scalarOr(task, "revision") << ")\n";
+        context.out << "Updated " << taskId_ << " (revision " << scalarOr(task, "revision")
+                    << ")\n";
         return 0;
     }
 
@@ -545,8 +545,8 @@ private:
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         // 协议无 requestBody，带 body 反而不洁：走无 body 请求。
-        const client::HttpResponse response = auth::sendNoBody(
-            api, "POST", "/tasks/" + taskId_ + "/lease/renew", "lease renew");
+        const client::HttpResponse response =
+            auth::sendNoBody(api, "POST", "/tasks/" + taskId_ + "/lease/renew", "lease renew");
         const json lease = json::parse(response.body);
 
         if (context.json) {
@@ -601,14 +601,12 @@ private:
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
         const TagRef tag = resolveTagRef(api, ws, tagArg_);
-        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/tags/" + tag.id,
-                         "task tag detach");
+        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/tags/" + tag.id, "task tag detach");
 
         if (context.json) {
             // 204 无响应体（含未挂载的幂等路径）：确认单对象为 CLI 呈现。
-            output::printJson(context.out, json{{"detached", true},
-                                                {"task_id", taskId_},
-                                                {"tag_id", tag.id}});
+            output::printJson(context.out,
+                              json{{"detached", true}, {"task_id", taskId_}, {"tag_id", tag.id}});
             return 0;
         }
         context.out << "Detached " << (tag.name.empty() ? tag.id : tag.name) << " from " << taskId_
