@@ -380,7 +380,7 @@ private:
             return 0;
         }
         context.out << getPath_ << "  revision " << doc->value("revision", std::int64_t{0}) << "  "
-                    << scalarOr(doc, "content_hash") << "  " << scalarOr(doc, "updated_at");
+                    << scalarOr(*doc, "content_hash") << "  " << scalarOr(*doc, "updated_at");
         if (doc->value("deleted", false)) {
             context.out << "  (deleted)";
         }
