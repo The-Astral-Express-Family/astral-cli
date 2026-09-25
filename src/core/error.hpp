@@ -26,6 +26,7 @@ enum class Errc {
     Conflict,              // CONFLICT (server returned 409)
     InsufficientScope,     // INSUFFICIENT_SCOPE (server returned 403)
     Usage,                 // USAGE (bad input that CLI11 alone can't express)
+    RegistrationRejected,  // REGISTRATION_REJECTED (server refused the signup)
     Internal,              // INTERNAL
 };
 

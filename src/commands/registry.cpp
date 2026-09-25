@@ -11,6 +11,7 @@
 #include "commands/login_cmd.hpp"
 #include "commands/msg_cmd.hpp"
 #include "commands/profile_cmd.hpp"
+#include "commands/register_cmd.hpp"
 #include "commands/tags_cmd.hpp"
 #include "commands/todo_cmd.hpp"
 #include "commands/version_cmd.hpp"
@@ -60,6 +61,7 @@ std::vector<std::unique_ptr<Command>> makeBuiltinCommands() {
     commands.push_back(makeLoginCommand());
     commands.push_back(makeLogoutCommand());
     commands.push_back(makeWhoamiCommand());
+    commands.push_back(makeRegisterCommand());
     commands.push_back(makeProfileCommand());
     commands.push_back(makeInitCommand());
     commands.push_back(makeTodoCommand());

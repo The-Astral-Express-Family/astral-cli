@@ -121,6 +121,8 @@ inline std::filesystem::path uniqueHome(const char* stem) {
 struct ScriptedResponse {
     int status = 0;
     std::string body;
+    // Optional response headers (e.g. 429 Retry-After); default empty.
+    std::vector<std::pair<std::string, std::string>> headers{};
 };
 
 struct FakeApi {
@@ -134,7 +136,13 @@ struct FakeApi {
     std::vector<astral::client::HttpRequest> requests;
 
     void route(const std::string& needle, int status, const nlohmann::json& body, int uses = 1) {
-        routes.push_back(Route{needle, ScriptedResponse{status, body.dump()}, uses});
+        routes.push_back(Route{needle, ScriptedResponse{status, body.dump(), {}}, uses});
+    }
+
+    void routeWithHeaders(const std::string& needle, int status, const nlohmann::json& body,
+                          std::vector<std::pair<std::string, std::string>> headers, int uses = 1) {
+        routes.push_back(
+            Route{needle, ScriptedResponse{status, body.dump(), std::move(headers)}, uses});
     }
 
     astral::client::HttpResponse operator()(const astral::client::HttpRequest& request) {
@@ -145,6 +153,7 @@ struct FakeApi {
                 astral::client::HttpResponse response;
                 response.status = candidate.response.status;
                 response.body = candidate.response.body;
+                response.headers = candidate.response.headers;
                 return response;
             }
         }

@@ -7,7 +7,7 @@
 
 > 架构事实来源见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当前状态：v0.1 ——
 > 已接通**协议快照 v2.2**（容器化任务树 + documents 同步）：auth 链路（device
-> flow / whoami / logout / init 绑定）、`astral todo` / `astral tags` /
+> flow / register 邀请码注册 / whoami / logout / init 绑定）、`astral todo` / `astral tags` /
 > `astral msg` / `astral profile` 均已可用；`astral event listen` 已实装
 > （SSE -> JSON Lines，断线续传）；`astral document` 命令族已实装
 > （manifest/get/push/delete + conflicts list/show/resolve，phase-5 第一层）。
@@ -16,6 +16,9 @@
 
 ```text
 astral login <server_url>       # 设备码登录：拉起浏览器审批，轮询换取 token 对（已可用）
+astral register <server_url>    # 邀请码注册：POST /auth/register（--bootstrap 冷启动首个账号；注册成功
+                                # 默认自动衔接设备码登录拿 token 对，--no-login 跳过；email/password/
+                                # invite code 缺失时 TTY 交互补问，密码不回显，已可用）
 astral whoami [server_url]      # 当前登录身份（401 自动惰性刷新一次，已可用）
 astral logout [server_url]      # 服务端登出 + 清除本地会话（已可用）
 astral profile show/set         # 查看/更新自己的资料（PATCH /auth/me；agent 凭证同样可用，已可用）

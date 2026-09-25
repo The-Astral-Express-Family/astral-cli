@@ -42,6 +42,8 @@ std::string_view AstralError::codeString() const noexcept {
         return "CONFLICT";
     case Errc::InsufficientScope:
         return "INSUFFICIENT_SCOPE";
+    case Errc::RegistrationRejected:
+        return "REGISTRATION_REJECTED";
     case Errc::Usage:
         return "USAGE";
     case Errc::Internal:
@@ -74,6 +76,9 @@ int AstralError::exitCode() const noexcept {
         return static_cast<int>(ExitCode::Protocol);
     case Errc::CommandNotImplemented:
     case Errc::CredentialStoreError:
+    // 注册被拒（INVITE_INVALID/EMAIL_TAKEN/bootstrap 关闭/VALIDATION_FAILED/
+    // 429）恒 exit 1：语义与理由见 register_cmd 的错误映射。
+    case Errc::RegistrationRejected:
     case Errc::Internal:
         return static_cast<int>(ExitCode::GenericFailure);
     }

@@ -7,6 +7,7 @@ add_executable(astral-unit-tests
   test_event_cmd.cpp
   test_init_cmd.cpp
   test_profile_cmd.cpp
+  test_register_cmd.cpp
   test_todo_cmd.cpp
   test_file_credential_store.cpp
   test_json_output.cpp

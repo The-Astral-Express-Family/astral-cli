@@ -78,6 +78,7 @@ v0.1 采用下面这组主入口：
 
 ```text
 astral login <server_url>      # 已实装
+astral register <server_url>   # 已实装（邀请码注册，modulator TODO §3 P3 移交，见 §6.4）
 astral logout <server_url>     # 已实装
 astral whoami [<server_url>]   # 已实装
 astral profile show/set        # 已实装（round 29，GET/PATCH /auth/me）
@@ -227,6 +228,44 @@ ASTRAL_TOKEN=...
 `ASTRAL_TOKEN` 只影响当前进程，不落 Workspace，也不写入凭证文件。
 
 后续可增加 `--token-stdin`，但禁止把 token 设计为普通命令行位置参数，以免进入 shell history 与进程列表。
+
+### 6.4 `astral register <server_url>`
+
+邀请码注册（modulator TODO §3 P3 移交项；服务端契约 `POST /auth/register` 见
+modulator docs/registration.md，协议快照 key_semantics.invite_register）：
+
+```text
+astral register <url> --invite-code XXXXX-XXXXX-XXXXX-XXXXX [--email ... --password ... --display-name ...]
+astral register <url> --bootstrap ...     # 冷启动分支：服务器尚无 human 时建首个账号
+astral register <url> ... --no-login      # 只建号，不自动登录
+```
+
+- **匿名端点**：经 discovery 后直接 POST，不带任何 Bearer（`ASTRAL_TOKEN`
+  存在与否都不影响注册）。邀请码归一化（去 `-` + 大写）是服务端职责，CLI
+  原样传；`--invite-code` 与 `--bootstrap` 互斥（exit 2），两者都缺也是
+  用法错误。
+- **交互补问**：stdin 为 TTY 时，缺失的 email / password / invite code 逐项
+  提示（提示语走 stderr，`--json` 的 stdout 契约不受污染）；密码经
+  `platform::readLineNoEcho` 不回显。非 TTY 下缺失即 USAGE（exit 2），
+  机器调用不会被挂住。`--display-name` 纯旗标不补问（可选数据，事后
+  `astral profile set` 可改）。
+- **注册成功 ≠ CLI 登录**：201 响应附带的是 HttpOnly web 会话 cookie，
+  CLI 无法消费，因此缺省自动衔接 §6.2 的 device flow（同一 server URL，
+  复用 `runDeviceFlow`）换取可落盘的 token 对；`--no-login` 跳过。自动
+  登录失败时账号已建成：保留原退出码与协议错误字段，错误消息附
+  `astral login <url>` 重试提示。
+- **错误映射（§12 状态映射的显式例外）**：注册流的契约性拒绝——400
+  INVITE_INVALID / VALIDATION_FAILED、403 bootstrap 关闭、409 EMAIL_TAKEN、
+  429 RATE_LIMITED——一律 `REGISTRATION_REJECTED` + exit 1（一般失败）。
+  理由：调用者尚不持有任何凭证，这类失败没有可机器分支的恢复动作（换码、
+  换邮箱、稍后重试），按状态映射反而会把 403 误报成鉴权失败（3）、400
+  误报成协议不兼容（9）。服务端 message/details 并入人话消息；协议码经
+  withProtocol 透传给 `--json`（`error.code=INVITE_INVALID` 等）；429 额外
+  读 Retry-After 头提示重试秒数。契约外状态（5xx 等）仍走共享映射
+  （5xx→6）。
+- **`--json` 输出**：`{"registered": <Me envelope 原样>, "logged_in": bool,
+  "session": {"server_url","server_id","principal_id"}}`（`session` 仅在
+  登录成功时出现）。
 
 ## 7. 本地凭证存储
 
@@ -493,7 +532,9 @@ Bound backend -> https://astral.example.com (ws_01…)
 `{"error": {"code", "message", "request_id", "retryable"}}`，其中 `code` 为
 服务端稳定码（如 `TASK_ALREADY_CLAIMED`），退出码由 HTTP 状态映射
 （401/403→3、404→4、409→5、5xx→6、其余 4xx→9）。两类失败都可直接按
-`error.code` 分支。
+`error.code` 分支。例外：`astral register` 的契约性拒绝（INVITE_INVALID /
+EMAIL_TAKEN / bootstrap 关闭 / VALIDATION_FAILED / 429）恒 exit 1 +
+`REGISTRATION_REJECTED`（协议码照常透传），理由与边界见 §6.4。
 
 建议顶层退出码：
 

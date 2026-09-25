@@ -14,6 +14,7 @@ add_library(astral_core STATIC
   commands/login_cmd.cpp
   commands/msg_cmd.cpp
   commands/profile_cmd.cpp
+  commands/register_cmd.cpp
   commands/registry.cpp
   commands/tags_cmd.cpp
   commands/todo_cmd.cpp
