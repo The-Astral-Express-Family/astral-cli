@@ -1,7 +1,10 @@
 #include <algorithm>
 #include <cctype>
+#include <exception>
+#include <iostream>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <utility>
 
