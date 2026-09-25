@@ -1,8 +1,8 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "8ce293b",
-  "published_at": "2026-09-10",
+  "source_commit": "3772f7d",
+  "published_at": "2026-09-26",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.2 刷新自 8ce293b（round 29-38 增量）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.3 刷新自 3772f7d（round 41 增量）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -31,6 +31,7 @@
     "documents": "documents 七端点（manifest/get/push/delete + conflicts list/detail/resolve，round 38 实装）：content_hash 一律 sha256:<64 小写 hex>，基于原始 UTF-8 bytes 重算（不重写换行）——CLI 本地 hash 必须与此一致；push 事务内完成 R1 大小写检查（同 ws 仅大小写不同的已存路径 -> 400 VALIDATION_FAILED details.reason=path_case_collision）-> 行分类（创建 revision=1 / 快进 revision+1 / tombstone+base_revision=0 复活 / 失配落冲突工件 + 409 DOCUMENT_CONFLICT，details 含 conflict_id/current_revision/current_hash）；revision 匹配但 base_hash 不符 -> 400（本地状态错乱，不落工件）；content 上限 1MiB；push 支持 Idempotency-Key（重跑同命令重放首次 2xx，避免制造伪冲突工件）",
     "documents_delete": "DELETE /workspaces/{id}/documents/{path}?base_revision=N（缺失 400）：未删且 revision 匹配 -> tombstone（revision+1 + document.updated data.deleted=true）+ 204；已删且 base 匹配 -> 幂等 204；不匹配 -> 冲突工件（delete-vs-edit / edit-vs-delete）；manifest 默认排除 tombstone，include_deleted=true 供同步端侦测远端删除；get 对 tombstone 返回 deleted=true",
     "conflicts": "GET /workspaces/{id}/conflicts?status=open|resolved|all（默认 open）created_at DESC + id 游标；详情含双方全文（ours_content=push 方，theirs_content=服务端持有）；resolve POST {resolution: ours|theirs|merged|manual, content?}：ours -> 落 ours 内容新 revision；theirs -> 仅关闭（不 bump 不发事件，返回当前 Document）；merged/manual -> content 必填（缺失 400），落新 revision；已解决 -> 409；resolve 落内容时发 document.updated",
+    "document_versions": "GET /workspaces/{id}/document-versions?path=<已 canonicalize>（path 必填 query：文档路径本体是尾通配，子资源挂不进 /documents/{path}/ 下，故独立成资源与 /conflicts 同层）：历史只含被取代版本——当前版本仍在 documents 行走 get；每次内容被取代（push 快进 / resolve 落地 / 复活 / tombstone）前同事务归档一条全量快照（保留行当时 content/hash/revision 与 tombstone 状态，kind=push|resolve|revive|delete 标取代原因；(document_id, revision) 唯一约束兜底取代恰好一次）；revision 降序游标分页（游标=末行 revision，查询 revision<cursor；limit 缺省 50 上限 200，与 manifest 的 200/1000 自成一档）；文档不存在 404、存在但从未被取代空 items；授权走路径轴 scope（memory/ 前缀 -> memory:read，与 get 同口径）。GET /workspaces/{id}/document-versions/{revision}（revision>=1 路径参数）：单版全量快照，DocumentVersionDetail = 列表形状 + content（单版可达 1MiB，故列表不含全文，与 conflicts 列表/详情同惯例）。schema DocumentVersion/DocumentVersionDetail；ID 前缀 dvh。无写端点——恢复 = get --revision 取回旧内容后 push + pinned base（--base-revision/--base-hash），恢复本身也要过 CAS 不覆盖他人。保留策略是服务端运维项不属契约：TTL 30d + 每文档 50 版两道闸先到即剪（ASTRAL_DOC_HISTORY_TTL_HOURS/MAX_PER_DOC，双 0 无限保留），清扫不落 audit 不发事件。CLI 消费已落地（astral-cli 5c32909：document history / get --revision / push --force 盲推门）",
     "memory_prefix": "memory/ 前缀是 documents 端点内的保留子空间（M1）：该前缀读写要求 memory:read / memory:write scope（其余路径 document:*）；组织记忆 = 保留 workspace org-memory 下的 memory/** 文档；无独立 memory API",
     "pagination_envelope": "全部列表端点统一 {items,next_cursor} 信封（G1）：manifest（limit 缺省 200 上限 1000，游标=末行 path）/conflicts（共享 Limit 200）/workspace audit/admin audit/presence（next_cursor 恒 null，成员规模有界）",
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
@@ -50,7 +51,7 @@
     "Task 响应恒填充 tags（空数组兜底，修订 D11）与 children_count",
     "修复：search 结果行内联任务字段（v1 误包在 Task 键下）；tag 模块生产装配补接 DB（v1 全部 tag HTTP 端点 500）"
   ],
-  "synced_at": "2026-09-24",
+  "synced_at": "2026-09-26",
   "revisions": [
     {
       "date": "2026-09-10",
@@ -94,6 +95,19 @@
         "rate limit 落地（S5）：429 RATE_LIMITED + Retry-After，敏感/轮询/通用/SSE 四桶（见 key_semantics.rate_limit）",
         "会话管理端点（5fbb9e7）：GET /auth/sessions 列当前 human 活跃会话（SessionView）+ DELETE /auth/sessions/{id} 注销本人会话（统一 404 防枚举，撤销后断流）",
         "CLI 侧修复提交（8ce293b）：error.json 的 ErrorCode enum 在 round 38 移除 NOT_IMPLEMENTED 时遗留非法尾逗号，文件此前不是合法 JSON（modulator 契约门未做严格 JSON 解析故未拦截）；修复无语义变化"
+      ]
+    },
+    {
+      "date": "2026-09-26",
+      "label": "v2.3 快照刷新（round 41）",
+      "from_commit": "8ce293b",
+      "to_commit": "3772f7d",
+      "changes": [
+        "document-versions 历史版本链（00017）：新增 GET /workspaces/{id}/document-versions（path 必填 query，revision 降序游标分页，limit 缺省 50 上限 200）与 GET /workspaces/{id}/document-versions/{revision}（单版全量快照）；schema +DocumentVersion/DocumentVersionDetail；ID 前缀枚举 +dvh",
+        "归档语义：内容被取代（push 快进/resolve 落地/复活/tombstone，kind=push|resolve|revive|delete）前同事务归档全量快照；无写端点，恢复 = get --revision + pinned-base push 复用 CAS",
+        "f5b1e32（tag confirm 响应补 workspace_id）是实装补齐——openapi Tag schema 本就 required 该字段，契约无变化；error.schema.json / event.schema.json / well-known.json 逐字不变（已 diff 验证）",
+        "保留策略为服务端运维项不入契约：TTL 30d + 每文档 50 版（ASTRAL_DOC_HISTORY_*）",
+        "CLI 消费同轮落地（astral-cli 5c32909：document history / get --revision / push --force 盲推门）；protocol_version 与 min_cli_protocol_version 维持 2，纯增量无版本号变化"
       ]
     }
   ]

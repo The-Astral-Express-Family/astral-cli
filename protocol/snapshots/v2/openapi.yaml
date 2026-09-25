@@ -1020,6 +1020,64 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Document" }
 
+  /workspaces/{workspace_id}/document-versions:
+    get:
+      tags: [documents]
+      summary: 文档历史版本列表（revision 降序游标分页；path 必填 query）
+      operationId: listDocumentVersions
+      description: >
+        历史只含被取代版本——当前版本仍在文档行，走 get。每次内容被取代
+        （push 快进 / resolve 落地 / 复活 / tombstone）前同事务归档一条全量
+        快照。恢复不设写端点：取回旧内容后走 push + pinned base。
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+          description: 已 canonicalize 的文档路径
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 版本列表（游标 = 末行 revision，查询 revision < cursor）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentVersion" }
+                  next_cursor: { type: [string, "null"] }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /workspaces/{workspace_id}/document-versions/{revision}:
+    get:
+      tags: [documents]
+      summary: 单版本取回（含完整内容）
+      operationId: getDocumentVersion
+      parameters:
+        - { $ref: "#/components/parameters/WorkspaceId" }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+          description: 已 canonicalize 的文档路径
+        - name: revision
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: 版本全量快照
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentVersionDetail" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /workspaces/{workspace_id}/events:
     get:
       tags: [events]
@@ -1365,7 +1423,7 @@ components:
     Id:
       type: string
       pattern: "^[a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/prs/msg/evt/cred/ses/dev/req/aud/apv/inv。
+      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/dvh/prs/msg/evt/cred/ses/dev/req/aud/apv/inv。
       examples: ["ws_0192ab34-56cd-7ef8-9a01-234567890abc"]
 
     IdOrNull:
@@ -1871,6 +1929,30 @@ components:
       properties:
         resolution: { type: string, enum: [ours, theirs, merged, manual] }
         content: { type: string, description: resolution=merged/manual 时的最终内容 }
+
+    DocumentVersion:
+      type: object
+      required: [path, revision, content_hash, size, kind, deleted, actor_id, created_at]
+      description: 被取代文档版本的全量快照（列表形状，全文见详情端点）
+      properties:
+        path: { type: string }
+        revision: { type: integer, format: int64, description: 被取代时的版本号 }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        size: { type: integer, description: content 的 UTF-8 字节数 }
+        kind: { type: string, enum: [push, resolve, revive, delete], description: 该版本被取代的原因 }
+        deleted: { type: boolean, description: 快照时刻行的 tombstone 状态 }
+        actor_id: { type: string, description: 造成取代的 actor }
+        created_at: { type: string, format: date-time }
+
+    DocumentVersionDetail:
+      type: object
+      description: 版本详情 = 列表形状 + 完整内容
+      allOf:
+        - $ref: "#/components/schemas/DocumentVersion"
+        - type: object
+          required: [content]
+          properties:
+            content: { type: string, description: 快照完整内容（≤1MiB） }
 
     AgentCreate:
       type: object

@@ -60,8 +60,14 @@ TEST_CASE("documents endpoints are pinned in the frozen snapshot") {
              "/workspaces/{workspace_id}/documents/{path}:",
              "/workspaces/{workspace_id}/conflicts:",
              "/workspaces/{workspace_id}/conflicts/{conflict_id}:",
-             "/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:", "getDocumentManifest",
-             "pushDocument", "deleteDocument", "resolveConflict",
+             "/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:",
+             // v2.3（round 41）：history / get --revision 消费的历史链端点。
+             "/workspaces/{workspace_id}/document-versions:",
+             "/workspaces/{workspace_id}/document-versions/{revision}:", "getDocumentManifest",
+             "pushDocument", "deleteDocument", "resolveConflict", "listDocumentVersions",
+             "getDocumentVersion",
+             // 历史链 schema 名与 dvh 前缀（列表/详情形状 + ID 枚举）。
+             "DocumentVersion:", "DocumentVersionDetail:", "/dvh/",
              // CLI 本地实现所依赖的语义标注（R1 大小写冲突与 R2 版本头的
              // 约定在 modulator docs/protocol.md，不在本快照文件集内——
              // 行为由单测覆盖，这里只钉 openapi 内的事实）。
