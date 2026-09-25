@@ -91,7 +91,7 @@ astral status ...              # 桩（规划中）
 astral msg ...                 # 已实装（round 19）
 astral document ...            # 已实装（manifest/get/push/delete + conflicts list/show/resolve）
 astral event ...               # listen 已实装（round 22，SSE 流式 + 断线续传）
-astral agent ...               # 桩（规划中）
+astral agent ...               # 桩（设计定稿：docs/AGENT-CREDENTIALS.md，P1/P2 待实施）
 astral doctor                  # 已实装
 astral version                 # 已实装
 ```
@@ -628,6 +628,9 @@ Idempotency-Key（msg send、document push）。
 路径规则在 `platform/user_dirs` 集中实现；若用户设置 `ASTRAL_HOME`，以它为准。
 
 ## 16. 三端发行
+
+> 执行设计与分阶段计划（R0-R5）定稿于 [DISTRIBUTION.md](DISTRIBUTION.md)，
+> 本节只保留原则；产物矩阵、glibc 基线、签名降级态以该文为准。
 
 GitHub Actions 负责：
 
