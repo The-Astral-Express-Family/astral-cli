@@ -109,9 +109,10 @@ positional > `--server` > repo 绑定 > `ASTRAL_SERVER`。
 
 ```text
 astral document manifest [--include-deleted] [--all]   # 受管清单（path 升序游标）
-astral document get <path> [--raw]                     # 读取；--raw 只输出正文（脚本模式）
-astral document push <path> (--file <f>|'-'|--body <t>) [--base-revision N] [--base-hash H]
+astral document get <path> [--raw] [--revision N]      # 读取；--raw 只输出正文；--revision 取被取代的历史版本
+astral document push <path> (--file <f>|'-'|--body <t>) [--base-revision N] [--base-hash H] [--force]
 astral document delete <path> [--base-revision N]      # tombstone 删除（禁止盲删）
+astral document history <path> [--all]                 # 被取代版本列表（revision 降序游标；restore = get --revision + pinned push）
 astral document conflicts list [--status open|resolved|all]
 astral document conflicts show <id>                    # 双方全文对比
 astral document conflicts resolve <id> --resolution ours|theirs|merged|manual [--file|--body]
@@ -127,6 +128,12 @@ astral document conflicts resolve <id> --resolution ours|theirs|merged|manual [-
   同款节拍）；显式 `--base-revision 0` = 创建/复活（tombstone 行 push
   base 0 即复活）；`--base-revision >0` 必须带 `--base-hash`。404 或
   tombstone 都归零为 base 0。
+- **防盲推门**：缺省（GET-改-写）push 在远端**非空且内容不同**时本地拦截
+  （exit 2，指向 --force / pinned base / get 先看）——刚取的 base 让服务端
+  CAS 恒过，不拦就会静默覆盖他人成果（E2E 审计发现，服务端 00017 版本链
+  之前连恢复都没有）。显式 base（信任本地状态）、同内容（重放/有意再
+  bump）、空远端（占位填充）不拦；`--force` = 明确覆盖（被覆盖版本由服务端
+  history 保留）。
 - **Idempotency-Key**：push 携带确定性 key，**只由命令行可观测输入派生**——
   缺省（GET-改-写）模式 = `doc-` + fnv1a(path|content_hash)；显式
   `--base-revision` 时才纳入 base（命令行完整决定基准，重跑同样稳定）。

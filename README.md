@@ -25,8 +25,9 @@ astral todo list/add/show/claim/done/search
 astral tags list/create/rename/delete
                                 # 标签词典 + 两步确认（propose → --confirm，已可用）
 astral msg send/list            # workspace/actor:<id>/task:<id> 消息与线程（已可用）
-astral document manifest/get/push/delete
-                                # 受管文档读写（乐观并发 base_revision/base_hash，tombstone 删除，已可用）
+astral document manifest/get/push/delete/history
+                                # 受管文档读写（乐观并发 base_revision/base_hash，tombstone 删除，已可用）；
+                                # push 缺省覆盖非空异内容需 --force；history / get --revision 消费服务端版本链
 astral document conflicts list/show/resolve
                                 # 冲突双方对比与四选一解决（ours/theirs/merged/manual，已可用）
 astral event listen ...         # 已实装（round 22）

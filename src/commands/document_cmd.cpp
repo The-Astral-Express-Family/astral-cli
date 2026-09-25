@@ -7,6 +7,11 @@
 // push 携带确定性 Idempotency-Key——只由命令行输入派生（缺省=路径+内容，
 // 显式 base 才纳入），重跑同一命令重放首次 2xx，避免伪冲突工件；
 // 409 DOCUMENT_CONFLICT 的 details.conflict_id 提升为可操作的提示。
+//
+// 防盲推门（服务端 00017 版本链配套）：缺省（GET-改-写）push 在远端为非空
+// 且内容不同时会静默覆盖他人成果——此情形缺省拦截并指向 --force / pinned
+// base / history；显式 base（信任本地状态）与同内容/空远端不拦。被覆盖的
+// 内容由服务端 document_versions 保留（history / get --revision 可取回）。
 #include "commands/document_cmd.hpp"
 
 #include <cstdint>
@@ -248,6 +253,9 @@ public:
         CLI::App* get = app.add_subcommand("get", "Fetch one document");
         get->add_option("path", getPath_, "Repository-relative document path")->required();
         get->add_flag("--raw", getRaw_, "Print the content only (scripting mode)");
+        getRevOpt_ = get->add_option("--revision", getRevision_,
+                                     "Fetch a superseded version from history instead of the "
+                                     "current row (server document-versions)");
         // 路径是仓库相对的，不该被 CLI11 按 Windows 风格选项（/x）吞掉——
         // 关掉后 '/abs.md' 落进本地路径校验，给出准确错误而不是"缺参数"。
         get->allow_windows_style_options(false);
@@ -263,6 +271,9 @@ public:
                          "Base revision you last saw (omit: fetch current; 0: create/revive)");
         push->add_option("--base-hash", pushBaseHash_,
                          "sha256:<hex> content hash at the base revision");
+        push->add_flag("--force", pushForce_,
+                       "Allow replacing differing non-empty remote content in the default "
+                       "read-modify-write flow (the displaced version is retained in history)");
 
         CLI::App* remove =
             app.add_subcommand("delete", "Tombstone-delete one document (versioned, never blind)");
@@ -270,6 +281,12 @@ public:
         remove->add_option("path", deletePath_, "Repository-relative document path")->required();
         remove->add_option("--base-revision", deleteBaseRevision_,
                            "Base revision you last saw (omit: fetch current)");
+
+        CLI::App* history = app.add_subcommand(
+            "history", "List superseded versions, newest first (server document-versions)");
+        history->allow_windows_style_options(false);
+        history->add_option("path", historyPath_, "Repository-relative document path")->required();
+        addPageFlags(*history, historyPageFlags_, "Page size (server max 200)");
 
         CLI::App* conflicts = app.add_subcommand("conflicts", "Inspect and resolve conflicts");
         conflicts->require_subcommand(1);
@@ -295,6 +312,7 @@ public:
         getSub_ = get;
         pushSub_ = push;
         deleteSub_ = remove;
+        historySub_ = history;
         conflictsSub_ = conflicts;
         listSub_ = list;
         showSub_ = show;
@@ -313,6 +331,9 @@ public:
         }
         if (node_->got_subcommand(deleteSub_)) {
             return runDelete(context);
+        }
+        if (node_->got_subcommand(historySub_)) {
+            return runHistory(context);
         }
         if (node_->got_subcommand(conflictsSub_)) {
             if (conflictsSub_->got_subcommand(listSub_)) {
@@ -366,6 +387,39 @@ private:
     int runGet(const CommandContext& context) {
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
         const std::string encoded = encodeDocumentPath(getPath_);
+        // --revision：从历史版本链取被取代版本（DocumentVersionDetail），
+        // 当前版本仍走文档行——history 只含被取代版本。
+        if (getRevOpt_->count() > 0) {
+            if (*getRevision_ < 1) {
+                throw core::AstralError(core::Errc::Usage, "--revision must be >= 1");
+            }
+            const json version =
+                auth::getJson(api,
+                              "/workspaces/" + ws.workspaceId + "/document-versions/" +
+                                  std::to_string(*getRevision_) + "?path=" + encoded,
+                              "document version");
+            if (getRaw_) {
+                context.out << version.value("content", std::string());
+                return 0;
+            }
+            if (context.json) {
+                printJson(context.out, version);
+                return 0;
+            }
+            context.out << getPath_ << "  revision " << version.value("revision", std::int64_t{0})
+                        << "  " << scalarOr(version, "content_hash") << "  "
+                        << scalarOr(version, "created_at") << "  (" << scalarOr(version, "kind")
+                        << ")";
+            if (version.value("deleted", false)) {
+                context.out << "  (deleted)";
+            }
+            context.out << "\n\n" << version.value("content", std::string());
+            if (const std::string& content = version.at("content").get_ref<const std::string&>();
+                content.empty() || content.back() != '\n') {
+                context.out << '\n';
+            }
+            return 0;
+        }
         const std::optional<json> doc = fetchDocument(api, ws.workspaceId, encoded);
         if (!doc) {
             throw core::AstralError(core::Errc::NotFound,
@@ -408,6 +462,23 @@ private:
         std::string keySource = pushPath_ + "|" + contentHash;
         const BasePointer base =
             resolveBasePointer(api, ws.workspaceId, encoded, pushBaseRevision_, pushBaseHash_);
+        // 防盲推门：缺省模式下 base 来自刚 GET 的远端当前行，CAS 恒过——
+        // 覆盖非空且内容不同的远端会静默丢弃他人成果（E2E 审计发现①）。
+        // 显式 base（信任本地状态）不拦；同内容（重放/有意再 bump）与空远端
+        // （占位填充）不拦。被覆盖版本由服务端 history 保留，可 get --revision
+        // 取回后走 pinned-base push 恢复。
+        if (!pushBaseRevision_ && !pushForce_ && base.revision > 0 && base.hash != contentHash &&
+            base.hash != core::sha256ContentHash("")) {
+            throw core::AstralError(
+                core::Errc::Usage,
+                "push would replace remote revision " + std::to_string(base.revision) + " (" +
+                    base.hash.substr(0, 19) +
+                    "...) with different content; default pushes are read-modify-write and can "
+                    "silently discard others' work -- re-run with --force to overwrite (the "
+                    "displaced version is kept in history), pin --base-revision/--base-hash to "
+                    "what you last saw, or inspect first with `astral document get " +
+                    pushPath_ + "`");
+        }
         if (pushBaseRevision_) {
             keySource += "|" + std::to_string(base.revision) + "|" + base.hash;
         }
@@ -472,6 +543,41 @@ private:
         }
         context.out << "Deleted " << deletePath_ << " (tombstone at base revision " << baseRevision
                     << ")\n";
+        return 0;
+    }
+
+    int runHistory(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        const std::string encoded = encodeDocumentPath(historyPath_);
+        // 版本子资源无法挂在 /documents/{path}/versions（path 是尾通配），
+        // 服务端独立成 /document-versions（path 必填 query）。
+        std::string query = "path=" + encoded;
+        addPageParams(query, historyPageFlags_);
+        std::string nextCursor;
+        const json items = auth::fetchPageItems(
+            api, "/workspaces/" + ws.workspaceId + "/document-versions", std::move(query),
+            historyPageFlags_.all, "document history", nextCursor);
+        if (context.json) {
+            printPageJson(context.out, ws.workspaceId, items, nextCursor);
+            return 0;
+        }
+        if (items.empty()) {
+            context.out << "No superseded versions.\n";
+            return 0;
+        }
+        for (const auto& item : items) {
+            context.out << "r" << item.value("revision", std::int64_t{0}) << "  "
+                        << scalarOr(item, "kind") << "  " << item.value("size", std::int64_t{0})
+                        << "B  " << scalarOr(item, "actor_id") << "  "
+                        << scalarOr(item, "created_at") << "  " << scalarOr(item, "content_hash");
+            if (item.value("deleted", false)) {
+                context.out << "  (deleted)";
+            }
+            context.out << '\n';
+        }
+        if (!nextCursor.empty()) {
+            printMoreHint(context.out, items.size(), "--all");
+        }
         return 0;
     }
 
@@ -558,6 +664,7 @@ private:
     CLI::App* getSub_ = nullptr;
     CLI::App* pushSub_ = nullptr;
     CLI::App* deleteSub_ = nullptr;
+    CLI::App* historySub_ = nullptr;
     CLI::App* conflictsSub_ = nullptr;
     CLI::App* listSub_ = nullptr;
     CLI::App* showSub_ = nullptr;
@@ -567,6 +674,8 @@ private:
     PageFlags pageFlags_;
     std::string getPath_;
     bool getRaw_ = false;
+    CLI::Option* getRevOpt_ = nullptr;
+    std::optional<std::int64_t> getRevision_;
     std::string pushPath_;
     std::string pushFile_;
     std::string pushBody_;
@@ -574,8 +683,11 @@ private:
     CLI::Option* pushBodyOpt_ = nullptr;
     std::optional<std::int64_t> pushBaseRevision_;
     std::string pushBaseHash_;
+    bool pushForce_ = false;
     std::string deletePath_;
     std::optional<std::int64_t> deleteBaseRevision_;
+    std::string historyPath_;
+    PageFlags historyPageFlags_;
     std::string conflictStatus_ = "open";
     PageFlags conflictPageFlags_;
     std::string conflictId_;

@@ -139,7 +139,7 @@ TEST_CASE("document push resolves the base pointer by fetching the current row")
     fx.fake().route("/documents/notes/demo.md", 200, kDoc); // PUT
 
     const RunResult result =
-        runApp({"astral", "document", "push", "notes/demo.md", "--body", "# new"});
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "# new", "--force"});
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.out.find("revision 3") != std::string::npos);
 
@@ -163,8 +163,8 @@ TEST_CASE("document push resolves the base pointer by fetching the current row")
     docMoved["revision"] = 7;
     fx.fake().route("/documents/notes/demo.md", 200, docMoved);
     fx.fake().route("/documents/notes/demo.md", 200, docMoved);
-    REQUIRE(runApp({"astral", "document", "push", "notes/demo.md", "--body", "# new"}).exitCode ==
-            0);
+    REQUIRE(runApp({"astral", "document", "push", "notes/demo.md", "--body", "# new", "--force"})
+                .exitCode == 0);
     const client::HttpRequest& pushAgain = fx.fake().requests.back();
     const json bodyAgain = json::parse(pushAgain.body);
     REQUIRE(bodyAgain.at("base_revision") == 7); // base 跟随远端前移
@@ -243,7 +243,8 @@ TEST_CASE("document push surfaces the conflict id from a 409 envelope") {
                            {"request_id", "req_9"},
                            {"details", {{"conflict_id", "dfc_42"}, {"current_revision", 5}}}}}});
 
-    const RunResult human = runApp({"astral", "document", "push", "notes/demo.md", "--body", "x"});
+    const RunResult human =
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "x", "--force"});
     REQUIRE(human.exitCode == 5);
     // 人读模式的失败走 stderr（--json 契约：stdout 归机器）。
     REQUIRE(human.err.find("dfc_42") != std::string::npos);
@@ -259,7 +260,7 @@ TEST_CASE("document push surfaces the conflict id from a 409 envelope") {
                            {"request_id", "req_9"},
                            {"details", {{"conflict_id", "dfc_42"}, {"current_revision", 5}}}}}});
     const RunResult machine =
-        runApp({"astral", "document", "push", "notes/demo.md", "--body", "x", "--json"});
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "x", "--force", "--json"});
     REQUIRE(machine.exitCode == 5);
     const json payload = json::parse(machine.out);
     REQUIRE(payload.at("error").at("code") == "DOCUMENT_CONFLICT");
@@ -400,4 +401,148 @@ TEST_CASE("push rejects non-utf8 and oversized content locally") {
 
     // 缺内容源同样是用法错误。
     REQUIRE(runApp({"astral", "document", "push", "docs/x.md"}).exitCode == 2);
+}
+
+TEST_CASE("document push gates default overwrites of differing non-empty remote content") {
+    ApiFixture fx;
+    fx.fake().route("/documents/notes/demo.md", 200, kDoc); // GET base
+
+    // 缺省（GET-改-写）覆盖非空且内容不同的远端 → 拦截（exit 2），不发 PUT。
+    const RunResult gated =
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "# other"});
+    REQUIRE(gated.exitCode == 2);
+    REQUIRE(gated.err.find("--force") != std::string::npos);
+    REQUIRE(gated.err.find("revision 3") != std::string::npos);
+    REQUIRE(gated.err.find("--base-revision") != std::string::npos);
+    REQUIRE(fx.fake().requests.size() == 2); // well-known + GET，无 PUT
+
+    // --json 模式下同一拦截是结构化 USAGE envelope。
+    fx.fake().route("/documents/notes/demo.md", 200, kDoc); // GET base
+    const RunResult gatedJson =
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "# other", "--json"});
+    REQUIRE(gatedJson.exitCode == 2);
+    REQUIRE(json::parse(gatedJson.out).at("error").at("code") == "USAGE");
+
+    // 同内容（有意再 bump / 重放）不拦：远端 hash 与推送内容 hash 一致。
+    json docSame = kDoc;
+    docSame["content_hash"] = astral::core::sha256ContentHash("# demo\n");
+    fx.fake().route("/documents/notes/demo.md", 200, docSame); // GET base
+    fx.fake().route("/documents/notes/demo.md", 200, docSame); // PUT
+    REQUIRE(
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "# demo\n"}).exitCode ==
+        0);
+
+    // 空远端（占位填充）不拦：空内容 hash 已知，覆盖无损失。
+    fx.fake().route("/documents/notes/empty.md", 200,
+                    json{{"path", "notes/empty.md"},
+                         {"revision", 1},
+                         {"content_hash", kEmptyHash},
+                         {"content", ""},
+                         {"updated_at", "2026-09-24T00:00:00Z"}});
+    fx.fake().route("/documents/notes/empty.md", 200,
+                    json{{"path", "notes/empty.md"},
+                         {"revision", 2},
+                         {"content_hash", astral::core::sha256ContentHash("filled")},
+                         {"content", "filled"},
+                         {"updated_at", "2026-09-24T00:00:00Z"}});
+    REQUIRE(runApp({"astral", "document", "push", "notes/empty.md", "--body", "filled"}).exitCode ==
+            0);
+
+    // 显式 base 不拦（信任本地状态，由服务端 CAS 裁决）：不 GET，直接 PUT。
+    const std::size_t before = fx.fake().requests.size();
+    fx.fake().route("/documents/notes/demo.md", 200, kDoc); // PUT
+    const RunResult pinned =
+        runApp({"astral", "document", "push", "notes/demo.md", "--body", "z", "--base-revision",
+                "3", "--base-hash", "sha256:" + std::string(64, 'a')});
+    REQUIRE(pinned.exitCode == 0);
+    REQUIRE(fx.fake().requests.size() == before + 2); // well-known + PUT，无 GET
+    REQUIRE(fx.fake().requests.back().method == "PUT");
+}
+
+TEST_CASE("document history lists superseded versions with the page envelope") {
+    ApiFixture fx;
+    const json page =
+        json{{"items", json::array({json{{"path", "notes/demo.md"},
+                                         {"revision", 4},
+                                         {"content_hash", "sha256:" + std::string(64, 'c')},
+                                         {"size", 7552},
+                                         {"kind", "revive"},
+                                         {"deleted", true},
+                                         {"actor_id", "agt_other"},
+                                         {"created_at", "2026-09-25T03:13:48Z"}},
+                                    json{{"path", "notes/demo.md"},
+                                         {"revision", 3},
+                                         {"content_hash", "sha256:" + std::string(64, 'b')},
+                                         {"size", 7481},
+                                         {"kind", "push"},
+                                         {"deleted", false},
+                                         {"actor_id", "agt_me"},
+                                         {"created_at", "2026-09-25T02:00:00Z"}}})},
+             {"next_cursor", nullptr}};
+    fx.fake().route("/document-versions?", 200, page, 2);
+
+    const RunResult machine = runApp({"astral", "document", "history", "notes/demo.md", "--json"});
+    REQUIRE(machine.exitCode == 0);
+    const json payload = json::parse(machine.out);
+    REQUIRE(payload.at("workspace_id") == "ws_1");
+    REQUIRE(payload.at("items").size() == 2);
+    REQUIRE(payload.at("next_cursor").is_null());
+    // path 必填 query 随请求发出。
+    REQUIRE(fx.fake().requests.back().url.find("path=notes/demo.md") != std::string::npos);
+
+    const RunResult human = runApp({"astral", "document", "history", "notes/demo.md"});
+    REQUIRE(human.exitCode == 0);
+    REQUIRE(human.out.find("r4") != std::string::npos);
+    REQUIRE(human.out.find("revive") != std::string::npos);
+    REQUIRE(human.out.find("(deleted)") != std::string::npos);
+    REQUIRE(human.out.find("agt_me") != std::string::npos);
+
+    // 空历史（文档存在但从未被取代）。
+    fx.fake().route("/document-versions?", 200,
+                    json{{"items", json::array()}, {"next_cursor", nullptr}});
+    const RunResult none = runApp({"astral", "document", "history", "notes/demo.md"});
+    REQUIRE(none.exitCode == 0);
+    REQUIRE(none.out.find("No superseded versions.") != std::string::npos);
+}
+
+TEST_CASE("document get --revision fetches a superseded version from history") {
+    ApiFixture fx;
+    const json version = json{{"path", "notes/demo.md"},
+                              {"revision", 2},
+                              {"content_hash", "sha256:" + std::string(64, 'b')},
+                              {"size", 7},
+                              {"kind", "push"},
+                              {"deleted", false},
+                              {"actor_id", "agt_me"},
+                              {"created_at", "2026-09-25T02:00:00Z"},
+                              {"content", "# superseded\n"}};
+    fx.fake().route("/document-versions/2?", 200, version, 3);
+
+    const RunResult machine =
+        runApp({"astral", "document", "get", "notes/demo.md", "--revision", "2", "--json"});
+    REQUIRE(machine.exitCode == 0);
+    REQUIRE(json::parse(machine.out) == version);
+    REQUIRE(fx.fake().requests.back().url.find("/document-versions/2?path=notes/demo.md") !=
+            std::string::npos);
+
+    const RunResult raw =
+        runApp({"astral", "document", "get", "notes/demo.md", "--revision", "2", "--raw"});
+    REQUIRE(raw.exitCode == 0);
+    REQUIRE(raw.out == "# superseded\n");
+
+    const RunResult human =
+        runApp({"astral", "document", "get", "notes/demo.md", "--revision", "2"});
+    REQUIRE(human.exitCode == 0);
+    REQUIRE(human.out.find("revision 2") != std::string::npos);
+    REQUIRE(human.out.find("(push)") != std::string::npos);
+
+    // 当前版本不在历史里 -> 服务端 404 透传。
+    fx.fake().route("/document-versions/9?", 404,
+                    json::parse(errorEnvelopeBody("NOT_FOUND", "document version not found")));
+    REQUIRE(runApp({"astral", "document", "get", "notes/demo.md", "--revision", "9", "--json"})
+                .exitCode == 4);
+
+    // revision 下界在本地校验（>=1），不触网。
+    REQUIRE(runApp({"astral", "document", "get", "notes/demo.md", "--revision", "0"}).exitCode ==
+            2);
 }
