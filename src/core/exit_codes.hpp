@@ -14,6 +14,7 @@ enum class ExitCode : int {
     Timeout = 7,
     LocalWorkspace = 8,
     Protocol = 9,
+    UpdateIntegrity = 10, // supply-chain verification failed
 };
 
 } // namespace astral::core

@@ -22,6 +22,7 @@ enum class Errc {
     Timeout,               // TIMEOUT
     CommandNotImplemented, // COMMAND_NOT_IMPLEMENTED
     Internal,              // INTERNAL
+    UpdateIntegrity,       // UPDATE_INTEGRITY
 };
 
 class AstralError : public std::runtime_error {

@@ -29,6 +29,8 @@ std::string_view AstralError::codeString() const noexcept {
         return "COMMAND_NOT_IMPLEMENTED";
     case Errc::Internal:
         return "INTERNAL";
+    case Errc::UpdateIntegrity:
+        return "UPDATE_INTEGRITY";
     }
     return "INTERNAL";
 }
@@ -54,6 +56,8 @@ int AstralError::exitCode() const noexcept {
     case Errc::CredentialStoreError:
     case Errc::Internal:
         return static_cast<int>(ExitCode::GenericFailure);
+    case Errc::UpdateIntegrity:
+        return static_cast<int>(ExitCode::UpdateIntegrity);
     }
     return static_cast<int>(ExitCode::GenericFailure);
 }
