@@ -81,7 +81,8 @@ astral update --check    # 只查询，报告最新版本，不安装
    Windows `%LOCALAPPDATA%\Programs\astral`）或其子目录时允许自更新，否则退出码 8 并提示
    “非脚本安装，请用安装脚本或手动下载”。开发构建（`build/dev/astral`）同样不可自更新。
 2. **查询版本**：`GET /repos/<owner>/<repo>/releases/latest`（指定版本走 `/releases/tags/<tag>`），
-   解析 `tag_name` 与资产列表；本地 == 远端 → “已是最新”，退出码 0。
+   解析 `tag_name` 与资产列表；本地 == 远端 → “已是最新”，退出码 0。注：`ASTRAL_INSTALL_DIR`
+   自定义位置安装的二进制同样不可自更新（仅认两个约定目录，保守边界，有意为之）。
 3. **下载**：资产包 + `SHA256SUMS.txt` 到 `~/.astral-cli/tmp/update-XXXX/`；复用 `HttpClient`，
    天然继承 proxy 环境变量行为。
 4. **校验**：SHA256SUMS 行匹配后比对 picosha2 计算值；失配 → 删除临时目录并以新退出码 10 失败。
