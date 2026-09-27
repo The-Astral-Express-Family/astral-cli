@@ -13,6 +13,7 @@ add_library(astral_core STATIC
   core/env.cpp
   core/error.cpp
   core/log.cpp
+  core/semver.cpp
   core/version.cpp
   output/json_output.cpp
   output/style.cpp

@@ -5,6 +5,7 @@ add_executable(astral-unit-tests
   test_file_credential_store.cpp
   test_json_output.cpp
   test_resolve.cpp
+  test_semver.cpp
   test_sse.cpp
   test_target.cpp
   test_user_dirs.cpp
