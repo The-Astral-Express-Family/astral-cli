@@ -3,6 +3,7 @@ configure_file(core/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/core/v
 add_library(astral_core STATIC
   app/app.cpp
   auth/token_provider.cpp
+  client/github_release.cpp
   client/http_client.cpp
   client/sse.cpp
   commands/doctor_cmd.cpp
