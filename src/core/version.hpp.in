@@ -4,6 +4,7 @@ namespace astral::core {
 
 inline constexpr const char* kProjectName = "astral";
 inline constexpr const char* kProjectVersion = "@PROJECT_VERSION@";
+inline constexpr const char* kEmbedVersion = "@ASTRAL_EMBED_VERSION@";
 inline constexpr const char* kGitDescribe = "@ASTRAL_GIT_DESCRIBE@";
 
 // Protocol version this CLI speaks; see ARCHITECTURE.md section 5.

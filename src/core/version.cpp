@@ -3,7 +3,7 @@
 namespace astral::core {
 
 const char* versionString() {
-    return kProjectVersion;
+    return kEmbedVersion;
 }
 
 const char* buildPlatform() {

@@ -23,7 +23,7 @@ public:
             output::printJson(context.out, toJson());
             return 0;
         }
-        context.out << "astral " << core::kProjectVersion << " (" << core::kGitDescribe << ", "
+        context.out << "astral " << core::versionString() << " (" << core::kGitDescribe << ", "
                     << core::buildPlatform() << ", protocol " << core::kProtocolVersion << ")\n";
         return 0;
     }
@@ -33,6 +33,7 @@ private:
         return nlohmann::json{
             {"name", core::kProjectName},
             {"version", core::kProjectVersion},
+            {"embedVersion", core::kEmbedVersion},
             {"git", core::kGitDescribe},
             {"platform", core::buildPlatform()},
             {"protocolVersion", core::kProtocolVersion},

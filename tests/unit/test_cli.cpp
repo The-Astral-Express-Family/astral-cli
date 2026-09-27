@@ -9,6 +9,7 @@
 
 #include "app/app.hpp"
 #include "core/exit_codes.hpp"
+#include "core/version.hpp"
 
 namespace {
 
@@ -65,6 +66,18 @@ TEST_CASE("astral version --json pins the machine contract") {
     REQUIRE(payload.contains("version"));
     REQUIRE(payload.contains("platform"));
     REQUIRE(payload.contains("git"));
+    REQUIRE(payload.contains("embedVersion"));
+}
+
+TEST_CASE("astral version embeds the release version into the binary") {
+    const auto result = run({"astral", "version", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const auto payload = nlohmann::json::parse(result.out);
+    // Local builds have no release tag, so the embed value falls back to the
+    // project version (v + PROJECT_VERSION).
+    REQUIRE(payload.at("embedVersion") == std::string("v") + astral::core::kProjectVersion);
+    REQUIRE(payload.at("version") == astral::core::kProjectVersion);
 }
 
 TEST_CASE("the --version flag prints the version and exits 0") {

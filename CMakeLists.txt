@@ -33,6 +33,12 @@ if(ASTRAL_ENABLE_SANITIZERS AND NOT MSVC)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+# Release version embedded into the binary. Release builds pin the tag via
+# -DASTRAL_EMBED_VERSION=${GITHUB_REF_NAME} (e.g. "v0.2.0") at configure time.
+if(NOT DEFINED ASTRAL_EMBED_VERSION)
+  set(ASTRAL_EMBED_VERSION "v${PROJECT_VERSION}")
+endif()
+
 # Capture the git revision at configure time for `astral version`.
 find_package(Git QUIET)
 set(ASTRAL_GIT_DESCRIBE "unknown")
