@@ -7,6 +7,7 @@ add_executable(astral-unit-tests
   test_github_release.cpp
   test_json_output.cpp
   test_resolve.cpp
+  test_self_update.cpp
   test_semver.cpp
   test_sse.cpp
   test_target.cpp

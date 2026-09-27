@@ -22,6 +22,7 @@ add_library(astral_core STATIC
   output/tty.cpp
   platform/browser.cpp
   platform/credential_store.cpp
+  platform/self_update.cpp
   platform/user_dirs.cpp
   workspace/binding.cpp
   workspace/resolve.cpp
