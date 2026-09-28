@@ -48,10 +48,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang-format if missing
-        run: command -v clang-format >/dev/null || sudo apt-get install -y clang-format
+      - name: Install pinned clang-format (match dev toolchain)
+        run: pipx install clang-format==22.1.8 2>/dev/null || pip install clang-format==22.1.8
       - name: Check formatting
         run: |
+          clang-format --version
           files=$(find src tests -name '*.cpp' -o -name '*.hpp')
           clang-format --dry-run --Werror $files
 
