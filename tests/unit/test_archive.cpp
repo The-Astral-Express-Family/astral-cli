@@ -107,7 +107,8 @@ TEST_CASE("extractBinary extracts the astral member from a tar.gz and skips the 
     const fs::path dir = makeTempDir();
     const fs::path archivePath = dir / "update.tar.gz";
     writeArchive(archivePath, /*zip=*/false,
-                 {{"dir/README.md", "release notes"}, {"dir/astral", "astral-payload-targz"}});
+                 {{"dir/README.md", "release notes"},
+                  {std::string("dir/") + expectedMemberName(), "astral-payload-targz"}});
 
     const fs::path destDir = dir / "out";
     std::string error;
@@ -135,7 +136,8 @@ TEST_CASE("extractBinary extracts the astral member from a zip") {
     const fs::path dir = makeTempDir();
     const fs::path archivePath = dir / "update.zip";
     writeArchive(archivePath, /*zip=*/true,
-                 {{"bin/astral", "astral-payload-zip"}, {"bin/README.md", "notes"}});
+                 {{std::string("bin/") + expectedMemberName(), "astral-payload-zip"},
+                  {"bin/README.md", "notes"}});
 
     const fs::path destDir = dir / "out";
     std::string error;

@@ -106,6 +106,7 @@ TEST_CASE("currentExecutable returns an existing absolute path") {
     REQUIRE(fs::exists(exe));
 }
 
+#ifndef _WIN32
 TEST_CASE("exe under HOME/.local/bin is a managed install location") {
     HomeGuard guard;
     const fs::path home = makeTempDir("home-managed");
@@ -131,6 +132,8 @@ TEST_CASE("exe in a subdirectory of HOME/.local/bin is managed") {
 
     REQUIRE(isManagedInstallLocation(exe));
 }
+
+#endif // !_WIN32
 
 TEST_CASE("build tree exe is not a managed install location") {
     HomeGuard guard;
