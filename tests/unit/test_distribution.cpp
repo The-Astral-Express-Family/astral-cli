@@ -25,10 +25,14 @@ TEST_CASE("asset triplet rejects unknown platforms") {
 }
 
 TEST_CASE("asset name combines stripped tag, triplet and platform archive extension") {
-    REQUIRE(assetNameFor("v0.2.0", "linux/x86_64") == std::optional<std::string>{"astral-0.2.0-linux-x64.tar.gz"});
-    REQUIRE(assetNameFor("v0.2.0", "windows/x86_64") == std::optional<std::string>{"astral-0.2.0-windows-x64.zip"});
-    REQUIRE(assetNameFor("0.3.1", "macos/arm64") == std::optional<std::string>{"astral-0.3.1-macos-arm64.tar.gz"});
-    REQUIRE(assetNameFor("v1.0.0-rc.1", "linux/arm64") == std::optional<std::string>{"astral-1.0.0-rc.1-linux-arm64.tar.gz"});
+    REQUIRE(assetNameFor("v0.2.0", "linux/x86_64") ==
+            std::optional<std::string>{"astral-0.2.0-linux-x64.tar.gz"});
+    REQUIRE(assetNameFor("v0.2.0", "windows/x86_64") ==
+            std::optional<std::string>{"astral-0.2.0-windows-x64.zip"});
+    REQUIRE(assetNameFor("0.3.1", "macos/arm64") ==
+            std::optional<std::string>{"astral-0.3.1-macos-arm64.tar.gz"});
+    REQUIRE(assetNameFor("v1.0.0-rc.1", "linux/arm64") ==
+            std::optional<std::string>{"astral-1.0.0-rc.1-linux-arm64.tar.gz"});
 }
 
 TEST_CASE("asset name rejects unknown platform or empty tag") {
@@ -41,7 +45,7 @@ namespace {
 // Realistic 64-hex digest for valid-line parsing tests.
 const std::string kDigest(64, 'a');
 
-}  // namespace
+} // namespace
 
 TEST_CASE("sha line parses single-space hex/filename pairs") {
     const auto sum = parseShaLine(kDigest + " app.tar.gz");
@@ -87,7 +91,8 @@ TEST_CASE("sha line rejects lines without 64 hex chars") {
     // 65 chars: too long.
     REQUIRE_FALSE(parseShaLine(std::string(65, 'a') + "  app.tar.gz").has_value());
     // Non-hex characters.
-    REQUIRE_FALSE(parseShaLine(std::string(32, 'a') + std::string(32, 'g') + "  app.tar.gz").has_value());
+    REQUIRE_FALSE(
+        parseShaLine(std::string(32, 'a') + std::string(32, 'g') + "  app.tar.gz").has_value());
     // A 65th hex char glued to the digest: no whitespace after 64 hex, so
     // this is not a valid line (would otherwise swallow 'a' into the name).
     REQUIRE_FALSE(parseShaLine(std::string(65, 'a') + "  app.tar.gz").has_value());

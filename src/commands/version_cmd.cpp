@@ -2,7 +2,6 @@
 
 #include <ostream>
 
-
 #include "core/version.hpp"
 #include "output/json_output.hpp"
 
@@ -26,7 +25,6 @@ public:
                     << core::buildPlatform() << ", protocol " << core::kProtocolVersion << ")\n";
         return 0;
     }
-
 };
 
 } // namespace

@@ -33,11 +33,8 @@ std::string identityString() {
 
 nlohmann::json identityFields(const bool withName) {
     nlohmann::json fields = {
-        {"version", kProjectVersion},
-        {"embedVersion", kEmbedVersion},
-        {"git", kGitDescribe},
-        {"platform", buildPlatform()},
-        {"protocolVersion", kProtocolVersion},
+        {"version", kProjectVersion},  {"embedVersion", kEmbedVersion},       {"git", kGitDescribe},
+        {"platform", buildPlatform()}, {"protocolVersion", kProtocolVersion},
     };
     if (withName) {
         fields["name"] = kProjectName;

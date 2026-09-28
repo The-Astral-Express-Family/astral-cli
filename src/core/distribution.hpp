@@ -28,4 +28,4 @@ struct ShaSum {
 // digest is not exactly 64 hex chars or the file name is empty.
 std::optional<ShaSum> parseShaLine(std::string_view line);
 
-}  // namespace astral::core
+} // namespace astral::core

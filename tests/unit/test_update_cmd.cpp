@@ -61,15 +61,13 @@ void parse(std::vector<std::string> words) {
 
 } // namespace
 
-TEST_CASE("update with an invalid version argument is a usage error (exit 2)",
-          "[update_cmd]") {
+TEST_CASE("update with an invalid version argument is a usage error (exit 2)", "[update_cmd]") {
     const RunResult result = run({"astral", "update", "not-a-version"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
     REQUIRE(result.err.find("invalid version format") != std::string::npos);
 }
 
-TEST_CASE("update accepts valid version forms and the --check flag at parse time",
-          "[update_cmd]") {
+TEST_CASE("update accepts valid version forms and the --check flag at parse time", "[update_cmd]") {
     REQUIRE_NOTHROW(parse({"update", "v1.2.3"}));
     REQUIRE_NOTHROW(parse({"update", "1.2.3"}));
     REQUIRE_NOTHROW(parse({"update", "--check"}));

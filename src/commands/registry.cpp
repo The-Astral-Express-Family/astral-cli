@@ -9,12 +9,12 @@
 #include "commands/event_cmd.hpp"
 #include "commands/init_cmd.hpp"
 #include "commands/login_cmd.hpp"
-#include "commands/update_cmd.hpp"
 #include "commands/msg_cmd.hpp"
 #include "commands/profile_cmd.hpp"
 #include "commands/register_cmd.hpp"
 #include "commands/tags_cmd.hpp"
 #include "commands/todo_cmd.hpp"
+#include "commands/update_cmd.hpp"
 #include "commands/version_cmd.hpp"
 #include "core/error.hpp"
 

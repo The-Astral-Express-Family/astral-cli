@@ -43,8 +43,8 @@ bool isLegalIdentifier(std::string_view id) {
         return false;
     }
     for (const char c : id) {
-        const bool legal = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-                           (c >= 'A' && c <= 'Z') || c == '-';
+        const bool legal =
+            (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-';
         if (!legal) {
             return false;
         }

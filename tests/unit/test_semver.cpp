@@ -93,10 +93,10 @@ TEST_CASE("semver prerelease larger set wins when prefix equal") {
 }
 
 TEST_CASE("semver invalid prereleases are rejected") {
-    CHECK_FALSE(SemVer::parse("1.2.3-").has_value());        // empty identifier
-    CHECK_FALSE(SemVer::parse("1.2.3-rc..1").has_value());   // empty middle identifier
-    CHECK_FALSE(SemVer::parse("1.2.3-rc.01").has_value());   // leading zero in numeric identifier
-    CHECK_FALSE(SemVer::parse("1.2.3-rc.1!").has_value());   // illegal character
+    CHECK_FALSE(SemVer::parse("1.2.3-").has_value());      // empty identifier
+    CHECK_FALSE(SemVer::parse("1.2.3-rc..1").has_value()); // empty middle identifier
+    CHECK_FALSE(SemVer::parse("1.2.3-rc.01").has_value()); // leading zero in numeric identifier
+    CHECK_FALSE(SemVer::parse("1.2.3-rc.1!").has_value()); // illegal character
     // build metadata after '-' only is invalid; '+' must start build section
     CHECK(SemVer::parse("1.2.3-rc.1").has_value());
 }

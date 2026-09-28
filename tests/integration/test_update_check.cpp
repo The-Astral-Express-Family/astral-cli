@@ -37,8 +37,7 @@ RunResult run(std::vector<std::string> args) {
     for (auto& arg : args) {
         argv.push_back(const_cast<char*>(arg.c_str()));
     }
-    const int code =
-        astral::app::runApp(static_cast<int>(argv.size()), argv.data(), out, err);
+    const int code = astral::app::runApp(static_cast<int>(argv.size()), argv.data(), out, err);
     return {code, out.str(), err.str()};
 }
 

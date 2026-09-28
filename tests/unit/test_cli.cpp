@@ -52,7 +52,6 @@ TEST_CASE("astral version --json pins the machine contract") {
     REQUIRE(payload.contains("embedVersion"));
 }
 
-
 TEST_CASE("the --version flag prints the version and exits 0") {
     const auto result = runApp({"astral", "--version"});
     REQUIRE(result.exitCode == 0);
