@@ -55,13 +55,13 @@ public:
             ->check(CLI::Validator(
                 [](std::string& value) {
                     if (!core::SemVer::parse(value)) {
-                        throw CLI::ValidationError("version",
-                                                    "invalid version format: " + value);
+                        throw CLI::ValidationError("version", "invalid version format: " + value);
                     }
                     return std::string{};
                 },
                 "SEMVER", "semver"));
-        app.add_flag("--check,--dry-run", checkOnly_, "Only report the latest version, do not install");
+        app.add_flag("--check,--dry-run", checkOnly_,
+                     "Only report the latest version, do not install");
     }
 
     int execute(const CommandContext& context) override {
@@ -88,11 +88,11 @@ public:
         if (checkOnly_) {
             if (context.json) {
                 output::printJson(context.out, nlohmann::json{
-                    {"command", "update"},
-                    {"check", true},
-                    {"from", current},
-                    {"latest", targetTag},
-                });
+                                                   {"command", "update"},
+                                                   {"check", true},
+                                                   {"from", current},
+                                                   {"latest", targetTag},
+                                               });
             } else {
                 context.out << "current: " << current << ", latest: " << targetTag << "\n";
             }
@@ -105,10 +105,10 @@ public:
         if (currentVer && targetVer && *currentVer == *targetVer) {
             if (context.json) {
                 output::printJson(context.out, nlohmann::json{
-                    {"command", "update"},
-                    {"from", current},
-                    {"to", targetTag},
-                });
+                                                   {"command", "update"},
+                                                   {"from", current},
+                                                   {"to", targetTag},
+                                               });
             } else {
                 context.out << "astral " << current << " is up to date\n";
             }
@@ -153,7 +153,8 @@ public:
         const auto assetName = core::assetNameFor(targetTag, core::buildPlatform());
         if (!assetName) {
             throw core::AstralError(core::Errc::LocalWorkspaceError,
-                                    "unsupported platform for update: " + std::string(core::buildPlatform()));
+                                    "unsupported platform for update: " +
+                                        std::string(core::buildPlatform()));
         }
         std::string assetUrl;
         std::string sumsUrl;
@@ -241,9 +242,9 @@ public:
         std::string extractError;
         const auto extracted = platform::extractBinary(archivePath, workDir, extractError);
         if (!extracted) {
-            throw core::AstralError(core::Errc::UpdateIntegrity,
-                                    "cannot extract binary from " + *assetName + ": " +
-                                        extractError);
+            throw core::AstralError(core::Errc::UpdateIntegrity, "cannot extract binary from " +
+                                                                     *assetName + ": " +
+                                                                     extractError);
         }
         std::string replaceError;
         if (!platform::replaceExecutable(exePath, *extracted, replaceError)) {
@@ -253,10 +254,10 @@ public:
 
         if (context.json) {
             output::printJson(context.out, nlohmann::json{
-                {"command", "update"},
-                {"from", current},
-                {"to", targetTag},
-            });
+                                               {"command", "update"},
+                                               {"from", current},
+                                               {"to", targetTag},
+                                           });
         } else {
             context.out << "astral " << current << " -> " << targetTag << " installed\n";
         }

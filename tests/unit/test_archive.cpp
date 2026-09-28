@@ -125,8 +125,8 @@ TEST_CASE("extractBinary extracts the astral member from a tar.gz and skips the 
     std::error_code ec;
     const fs::perms perms = fs::status(*extracted, ec).permissions();
     const fs::perms executable = fs::perms::owner_all | fs::perms::group_read |
-                                  fs::perms::group_exec | fs::perms::others_read |
-                                  fs::perms::others_exec;
+                                 fs::perms::group_exec | fs::perms::others_read |
+                                 fs::perms::others_exec;
     REQUIRE((perms & fs::perms::mask) == executable);
 #endif
 }
