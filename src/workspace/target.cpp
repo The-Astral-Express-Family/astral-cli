@@ -53,14 +53,17 @@ std::optional<std::string> normalizeServerUrl(const std::string& raw) {
 TargetSpec parseTargetSpec(const std::string& input,
                            const std::optional<std::string>& explicitWorkspace) {
     TargetSpec spec;
+    // 先规范化（scheme/host 小写、去根尾斜杠），保证 URL 比较与凭证主键稳定；
+    // 非法 scheme 的输入原样保留，由后续 discovery 阶段报错。
+    const std::string url = normalizeServerUrl(input).value_or(input);
     if (explicitWorkspace) {
-        spec.fullUrl = input;
+        spec.fullUrl = url;
         spec.workspaceName = explicitWorkspace;
         return spec;
     }
 
-    spec.fullUrl = input;
-    auto [authority, path] = splitAtPath(input);
+    spec.fullUrl = url;
+    auto [authority, path] = splitAtPath(url);
     // Trim slashes on both sides to find the last real segment.
     const auto firstNonSlash = path.find_first_not_of('/');
     if (firstNonSlash == std::string::npos) {

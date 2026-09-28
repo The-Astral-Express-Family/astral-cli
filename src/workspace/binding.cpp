@@ -1,25 +1,17 @@
 #include "workspace/binding.hpp"
 
 #include <fstream>
-#include <random>
-#include <sstream>
 
 #include <nlohmann/json.hpp>
 
 #include "core/error.hpp"
+#include "platform/atomic_file.hpp"
 
 namespace astral::workspace {
 
 namespace {
 
 constexpr int kBindingVersion = 1;
-
-std::string randomSuffix() {
-    static std::random_device device;
-    std::stringstream stream;
-    stream << std::hex << device();
-    return stream.str();
-}
 
 Binding parseBinding(const nlohmann::json& root) {
     Binding binding;
@@ -112,29 +104,8 @@ void writeBinding(const fs::path& dir, const Binding& binding) {
          }},
     };
 
-    const fs::path target = astralDir / "config.json";
-    const fs::path temp = astralDir / (".config.json.tmp." + randomSuffix());
-    {
-        std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-        if (!output) {
-            fs::remove(temp, ec);
-            throw core::AstralError(core::Errc::LocalWorkspaceError,
-                                    "cannot write " + temp.string());
-        }
-        output << root.dump(2) << '\n';
-        output.flush();
-        if (!output) {
-            fs::remove(temp, ec);
-            throw core::AstralError(core::Errc::LocalWorkspaceError,
-                                    "failed writing " + temp.string());
-        }
-    }
-    fs::rename(temp, target, ec);
-    if (ec) {
-        fs::remove(temp, ec);
-        throw core::AstralError(core::Errc::LocalWorkspaceError,
-                                "cannot finalize " + target.string() + ": " + ec.message());
-    }
+    platform::writeFileAtomic(astralDir / "config.json", root.dump(2) + '\n',
+                              core::Errc::LocalWorkspaceError, /*ownerOnly=*/false);
 }
 
 bool sameTarget(const Binding& left, const Binding& right) {

@@ -1,57 +1,27 @@
 #include "platform/credential_store.hpp"
 
 #include <fstream>
-#include <random>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 
+#include "platform/atomic_file.hpp"
 #include "platform/user_dirs.hpp"
 
 namespace astral::platform {
 
 namespace {
 
-constexpr int kCredentialsVersion = 1;
+// v2: 增加 sessions 槽（D12，human device-flow 登录态）。此前 login 未实装、
+// 市面不存在 v1 文件，直接升版不做迁移。
+constexpr int kCredentialsVersion = 2;
 
 nlohmann::json freshRoot() {
-    return nlohmann::json{{"version", kCredentialsVersion}, {"servers", nlohmann::json::object()}};
-}
-
-std::string randomSuffix() {
-    static std::random_device device;
-    std::stringstream stream;
-    stream << std::hex << device();
-    return stream.str();
+    return nlohmann::json{{"version", kCredentialsVersion},
+                          {"servers", nlohmann::json::object()},
+                          {"sessions", nlohmann::json::object()}};
 }
 
 } // namespace
-
-std::optional<Credential> MemoryCredentialStore::load(const ServerId& server) const {
-    auto it = entries_.find(server);
-    if (it == entries_.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-void MemoryCredentialStore::save(const ServerId& server, const Credential& credential) {
-    entries_.insert_or_assign(server, credential);
-}
-
-void MemoryCredentialStore::erase(const ServerId& server) {
-    entries_.erase(server);
-}
-
-std::vector<ServerId> MemoryCredentialStore::list() const {
-    std::vector<ServerId> servers;
-    servers.reserve(entries_.size());
-    for (const auto& [server, credential] : entries_) {
-        (void)credential;
-        servers.push_back(server);
-    }
-    return servers;
-}
 
 FileCredentialStore::FileCredentialStore(std::filesystem::path file) : file_(std::move(file)) {}
 
@@ -103,35 +73,10 @@ void FileCredentialStore::writeRoot(const nlohmann::json& root) const {
         }
     }
 
-    const fs::path temp = dir / ("." + file_.filename().string() + ".tmp." + randomSuffix());
-    {
-        std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-        if (!output) {
-            fs::remove(temp);
-            throw core::AstralError(core::Errc::CredentialStoreError,
-                                    "cannot write " + temp.string());
-        }
-        output << root.dump(2) << '\n';
-        output.flush();
-        if (!output) {
-            fs::remove(temp);
-            throw core::AstralError(core::Errc::CredentialStoreError,
-                                    "failed writing " + temp.string());
-        }
-    }
-
     // Owner-only：POSIX 上设 0600；Windows 文件留在用户 profile 内，由
-    // 目录 ACL 保护，这里 set 位是 best-effort。
-    std::error_code ec;
-    fs::permissions(temp, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace,
-                    ec);
-
-    fs::rename(temp, file_, ec);
-    if (ec) {
-        fs::remove(temp, ec);
-        throw core::AstralError(core::Errc::CredentialStoreError,
-                                "cannot finalize " + file_.string() + ": " + ec.message());
-    }
+    // 目录 ACL 保护，set 位在 helper 内是 best-effort。
+    platform::writeFileAtomic(file_, root.dump(2) + '\n', core::Errc::CredentialStoreError,
+                              /*ownerOnly=*/true);
 }
 
 std::optional<Credential> FileCredentialStore::load(const ServerId& server) const {
@@ -154,11 +99,9 @@ std::optional<Credential> FileCredentialStore::load(const ServerId& server) cons
 
 void FileCredentialStore::save(const ServerId& server, const Credential& credential) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // tolerant：损坏/缺失的文件直接重建，所以 login 顺手就能修复坏文件。
+    // tolerant：损坏/缺失的文件直接重建（shape 校验保证 servers 必为 object），
+    // 所以 login 顺手就能修复坏文件。
     nlohmann::json root = readRoot(/*tolerant=*/true);
-    if (!root.contains("servers") || !root["servers"].is_object()) {
-        root["servers"] = nlohmann::json::object();
-    }
     root["servers"][server] = {
         {"principal_id", credential.principalId},
         {"access_token", credential.accessToken},
@@ -171,9 +114,7 @@ void FileCredentialStore::save(const ServerId& server, const Credential& credent
 void FileCredentialStore::erase(const ServerId& server) {
     std::lock_guard<std::mutex> lock(mutex_);
     nlohmann::json root = readRoot(/*tolerant=*/true);
-    if (root.contains("servers") && root["servers"].is_object()) {
-        root["servers"].erase(server);
-    }
+    root["servers"].erase(server);
     writeRoot(root);
 }
 
@@ -187,6 +128,70 @@ std::vector<ServerId> FileCredentialStore::list() const {
         }
     }
     return servers;
+}
+
+namespace {
+
+LoginSession sessionFromJson(const ServerId& key, const nlohmann::json& entry) {
+    LoginSession session;
+    session.serverUrl = key;
+    session.serverId = entry.value("server_id", std::string());
+    session.apiBase = entry.value("api_base", std::string());
+    session.accessToken = entry.value("access_token", std::string());
+    session.refreshToken = entry.value("refresh_token", std::string());
+    session.principalId = entry.value("principal_id", std::string());
+    return session;
+}
+
+nlohmann::json sessionToJson(const LoginSession& session) {
+    return {
+        {"server_id", session.serverId},       {"api_base", session.apiBase},
+        {"access_token", session.accessToken}, {"refresh_token", session.refreshToken},
+        {"principal_id", session.principalId},
+    };
+}
+
+} // namespace
+
+std::optional<LoginSession> FileCredentialStore::loadSession(const ServerId& serverUrl) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const nlohmann::json root = readRoot(/*tolerant=*/false);
+    const auto sessions = root.find("sessions");
+    if (sessions == root.end() || !sessions->is_object()) {
+        return std::nullopt;
+    }
+    const auto entry = sessions->find(serverUrl);
+    if (entry == sessions->end() || !entry->is_object()) {
+        return std::nullopt;
+    }
+    return sessionFromJson(serverUrl, *entry);
+}
+
+void FileCredentialStore::saveSession(const ServerId& serverUrl, const LoginSession& session) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nlohmann::json root = readRoot(/*tolerant=*/true);
+    root["sessions"][serverUrl] = sessionToJson(session);
+    root["version"] = kCredentialsVersion;
+    writeRoot(root);
+}
+
+void FileCredentialStore::eraseSession(const ServerId& serverUrl) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nlohmann::json root = readRoot(/*tolerant=*/true);
+    root["sessions"].erase(serverUrl);
+    writeRoot(root);
+}
+
+std::vector<ServerId> FileCredentialStore::listSessions() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<ServerId> urls;
+    const nlohmann::json root = readRoot(/*tolerant=*/false);
+    if (root.contains("sessions") && root["sessions"].is_object()) {
+        for (auto it = root["sessions"].begin(); it != root["sessions"].end(); ++it) {
+            urls.push_back(it.key());
+        }
+    }
+    return urls;
 }
 
 std::unique_ptr<CredentialStore> makeDefaultCredentialStore() {

@@ -2,7 +2,6 @@
 
 #include <ostream>
 
-#include <nlohmann/json.hpp>
 
 #include "core/version.hpp"
 #include "output/json_output.hpp"
@@ -20,7 +19,7 @@ public:
 
     int execute(const CommandContext& context) override {
         if (context.json) {
-            output::printJson(context.out, toJson());
+            output::printJson(context.out, core::identityFields(/*withName=*/true));
             return 0;
         }
         context.out << "astral " << core::versionString() << " (" << core::kGitDescribe << ", "
@@ -28,17 +27,6 @@ public:
         return 0;
     }
 
-private:
-    static nlohmann::json toJson() {
-        return nlohmann::json{
-            {"name", core::kProjectName},
-            {"version", core::kProjectVersion},
-            {"embedVersion", core::kEmbedVersion},
-            {"git", core::kGitDescribe},
-            {"platform", core::buildPlatform()},
-            {"protocolVersion", core::kProtocolVersion},
-        };
-    }
 };
 
 } // namespace

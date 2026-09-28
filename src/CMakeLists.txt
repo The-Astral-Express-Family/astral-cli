@@ -2,29 +2,44 @@ configure_file(core/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/core/v
 
 add_library(astral_core STATIC
   app/app.cpp
-  auth/token_provider.cpp
   client/github_release.cpp
+  auth/api.cpp
+  auth/device_flow.cpp
+  auth/session.cpp
   client/http_client.cpp
   client/sse.cpp
   commands/doctor_cmd.cpp
+  commands/document_cmd.cpp
+  commands/event_cmd.cpp
   commands/init_cmd.cpp
   commands/login_cmd.cpp
+  commands/msg_cmd.cpp
+  commands/profile_cmd.cpp
+  commands/register_cmd.cpp
   commands/registry.cpp
   commands/update_cmd.cpp
   commands/version_cmd.cpp
   core/distribution.cpp
+  commands/tags_cmd.cpp
+  commands/todo_cmd.cpp
+  core/content_hash.cpp
   core/env.cpp
   core/error.cpp
   core/log.cpp
   core/semver.cpp
   core/version.cpp
+  events/listen.cpp
   output/json_output.cpp
+  output/render.cpp
   output/style.cpp
   output/tty.cpp
   platform/archive.cpp
   platform/browser.cpp
   platform/credential_store.cpp
   platform/self_update.cpp
+  platform/args.cpp
+  platform/atomic_file.cpp
+  platform/stdin.cpp
   platform/user_dirs.cpp
   workspace/binding.cpp
   workspace/resolve.cpp

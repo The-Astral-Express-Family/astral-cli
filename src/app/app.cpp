@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "CLI/CLI.hpp"
+#include <nlohmann/json.hpp>
+
 #include "commands/command.hpp"
 #include "commands/registry.hpp"
 #include "core/error.hpp"
@@ -15,6 +17,7 @@
 #include "output/json_output.hpp"
 #include "output/style.hpp"
 #include "output/tty.hpp"
+#include "platform/args.hpp"
 
 namespace astral::app {
 
@@ -30,7 +33,14 @@ struct GlobalOptions {
 
 void printFailure(const commands::CommandContext& context, const core::AstralError& error) {
     if (context.json) {
-        output::printJsonError(context.out, error.codeString(), error.what());
+        // ARCHITECTURE.md section 12: protocol failures surface the server's
+        // stable error.code plus request_id/retryable so agents branch on the
+        // frozen contract; CLI-local failures keep CLI-local codes only.
+        output::printJson(context.out, output::errorEnvelope(error.protocolCode()
+                                                                 ? *error.protocolCode()
+                                                                 : std::string(error.codeString()),
+                                                             std::string(error.what()),
+                                                             error.requestId(), error.retryable()));
         return;
     }
     const output::Painter paint(context.color);
@@ -68,7 +78,9 @@ int dispatchCommand(commands::Command& command, const GlobalOptions& options, st
 
 int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
     CLI::App app{"astral - client for Astral servers", "astral"};
-    app.set_version_flag("-v,--version", core::versionString());
+    app.set_version_flag("-v,--version", std::string(core::kProjectVersion));
+    // 注：version 串参数实际不会输出——本程序自行捕获 CLI::CallForVersion
+    // 打印加长格式（版本 + 平台 + 协议版本），CLI11 自带的 run() 未被使用。
     app.require_subcommand(1);
     // Global flags stay usable after the subcommand (e.g. `astral todo list
     // --json`), matching what users expect from modern CLIs.
@@ -104,9 +116,8 @@ int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
         err << app.help();
         return static_cast<int>(core::ExitCode::Success);
     } catch (const CLI::CallForVersion& version) {
-        out << "astral " << core::versionString() << " (" << core::buildPlatform() << ", protocol "
-            << core::kProtocolVersion << ")\n";
         (void)version;
+        out << core::identityString() << "\n";
         return static_cast<int>(core::ExitCode::Success);
     } catch (const CLI::ParseError& parseError) {
         // Usage failures are exit code 2 (ARCHITECTURE.md section 12).
@@ -121,7 +132,15 @@ int runMain(int argc, char** argv) {
 #ifdef _WIN32
     output::enableNativeAnsi();
 #endif
-    return runApp(argc, argv, std::cout, std::cerr);
+    // argv 归一 UTF-8（Windows ANSI 代码页防御；见 platform/args.hpp）。
+    // 单测直接调 runApp 注入 UTF-8 字符串，不经此层。
+    std::vector<std::string> utf8Args = platform::argsToUtf8(argc, argv);
+    std::vector<char*> owned;
+    owned.reserve(utf8Args.size());
+    for (std::string& arg : utf8Args) {
+        owned.push_back(arg.data());
+    }
+    return runApp(static_cast<int>(owned.size()), owned.data(), std::cout, std::cerr);
 }
 
 } // namespace astral::app

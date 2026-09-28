@@ -1,13 +1,13 @@
 #include "output/tty.hpp"
 
-#include <cstdlib>
+#include "core/env.hpp" // getenv 收口在 core::env（MSVC 下 getenv 触发 C4996/-WX）
+
 #include <string>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+#include "platform/win_headers.hpp"
+
 #include <io.h>
-#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -25,8 +25,8 @@ bool fdIsTty(int fd) {
 }
 
 bool noColorRequested() {
-    const char* value = std::getenv("NO_COLOR");
-    return value != nullptr && *value != '\0';
+    // NO_COLOR 约定（no-color.org）：存在且非空即禁用颜色。
+    return astral::core::env::get("NO_COLOR").has_value();
 }
 
 } // namespace
@@ -40,6 +40,10 @@ bool stderrIsTty() {
 
 void enableNativeAnsi() {
 #ifdef _WIN32
+    // 控制台输出代码页切 UTF-8：stdout 全线输出 UTF-8 字节（协议/文档内容），
+    // 保持默认 ACP 代码页时 conhost 会把中文渲染成乱码。重定向到管道时该
+    // 调用无效但无害。
+    SetConsoleOutputCP(65001);
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     if (handle == INVALID_HANDLE_VALUE) {
         return;

@@ -77,24 +77,77 @@ CLI 只依赖公开协议版本。`astral-modulator` 发布协议变更时，应
 v0.1 采用下面这组主入口：
 
 ```text
-astral login <server_url>
-astral logout <server_url>
-astral whoami [<server_url>]
-astral init <server_url>[/<workspace_name>] [path]
+astral login <server_url>      # 已实装
+astral register <server_url>   # 已实装（邀请码注册，modulator TODO §3 P3 移交，见 §6.4）
+astral logout <server_url>     # 已实装
+astral whoami [<server_url>]   # 已实装
+astral profile show/set        # 已实装（round 29，GET/PATCH /auth/me）
+astral init <server_url>[/<workspace_name>] [path]   # 已实装
 
-astral workspace ...
-astral todo ...
-astral tags ...
-astral status ...
-astral msg ...
-astral document ...
-astral event ...
-astral agent ...
-astral doctor
-astral version
+astral workspace ...           # 桩（规划中）
+astral todo ...                # 已实装（协议 v2）
+astral tags ...                # 已实装（round 19）
+astral status ...              # 桩（规划中）
+astral msg ...                 # 已实装（round 19）
+astral document ...            # 已实装（manifest/get/push/delete + conflicts list/show/resolve）
+astral event ...               # listen 已实装（round 22，SSE 流式 + 断线续传）
+astral agent ...               # 桩（设计定稿：docs/AGENT-CREDENTIALS.md，P1/P2 待实施）
+astral doctor                  # 已实装
+astral version                 # 已实装
 ```
 
 `astral login` 是正式入口，不再要求用户记 `astral auth login --server ...` 这类长写法。
+
+`astral profile`（round 29）消费快照 v2.1 的 actor 资料契约：`show` 渲染
+GET /auth/me 的 Me envelope（email 仅 human），`set` 以部分更新语义调
+PATCH /auth/me——只序列化给出的字段，bio/avatar_url 空串=清除，空
+display_name 本地即拒。鉴权走 §6.3 Bearer 策略（ASTRAL_TOKEN 优先），
+因此 agent 凭证可以用它自管 display_name/bio/avatar_url。server 解析为
+positional > `--server` > repo 绑定 > `ASTRAL_SERVER`。
+
+`astral document`（phase-5 第一层，消费快照 v2.2 的 documents 七端点）是
+单文档的命令面，不承担批量同步引擎（`astral sync` 是下一层，见 §11 尾）：
+
+```text
+astral document manifest [--include-deleted] [--all]   # 受管清单（path 升序游标）
+astral document get <path> [--raw] [--revision N]      # 读取；--raw 只输出正文；--revision 取被取代的历史版本
+astral document push <path> (--file <f>|'-'|--body <t>) [--base-revision N] [--base-hash H] [--force]
+astral document delete <path> [--base-revision N]      # tombstone 删除（禁止盲删）
+astral document history <path> [--all]                 # 被取代版本列表（revision 降序游标；restore = get --revision + pinned push）
+astral document conflicts list [--status open|resolved|all]
+astral document conflicts show <id>                    # 双方全文对比
+astral document conflicts resolve <id> --resolution ours|theirs|merged|manual [--file|--body]
+```
+
+关键语义（与 modulator sync-semantics / openapi 对齐）：
+
+- **content_hash 口径**：`sha256:<64 小写 hex>`，基于**原始 UTF-8 bytes**
+  （不重写换行，CRLF 原样进 hash 与 JSON body）；本地与远端不一致时 push
+  必被 400 拒——双端对接最易错点。内容须过 UTF-8 结构校验（超长编码/
+  代理区/截断序列本地即拒，exit 2），上限 1MiB。
+- **base 指针**：push/delete 缺省先 GET 当前行作 base（读改写，claim/done
+  同款节拍）；显式 `--base-revision 0` = 创建/复活（tombstone 行 push
+  base 0 即复活）；`--base-revision >0` 必须带 `--base-hash`。404 或
+  tombstone 都归零为 base 0。
+- **防盲推门**：缺省（GET-改-写）push 在远端**非空且内容不同**时本地拦截
+  （exit 2，指向 --force / pinned base / get 先看）——刚取的 base 让服务端
+  CAS 恒过，不拦就会静默覆盖他人成果（E2E 审计发现，服务端 00017 版本链
+  之前连恢复都没有）。显式 base（信任本地状态）、同内容（重放/有意再
+  bump）、空远端（占位填充）不拦；`--force` = 明确覆盖（被覆盖版本由服务端
+  history 保留）。
+- **Idempotency-Key**：push 携带确定性 key，**只由命令行可观测输入派生**——
+  缺省（GET-改-写）模式 = `doc-` + fnv1a(path|content_hash)；显式
+  `--base-revision` 时才纳入 base（命令行完整决定基准，重跑同样稳定）。
+  重跑同一命令重放首次 2xx（E2E 验证：三连推 revision 稳定）。key 若随
+  GET 到的动态 base 变化，重跑会同内容连续 bump，远端被他人改动时还会
+  落下**不可收回的伪冲突工件**。注意服务端只缓存 2xx：重跑**本就冲突**
+  的命令会累积冲突工件，sync 引擎层需按 path+base 去重提示。
+- **409 DOCUMENT_CONFLICT**：错误 envelope 的 `details.conflict_id` 被提升
+  进错误消息（`astral document conflicts show <id>` 提示），exit 5；
+  `--json` 仍透传 `error.code=DOCUMENT_CONFLICT` + request_id/retryable。
+- **路径编码**：按 `/` 分段、段内 urlEncode、`/` 字面保留；本地做结构
+  校验（空段/`..`/反斜杠/控制字符/超长），保留前缀黑名单与大小写冲突
+  （R1 `path_case_collision`）等权威判定留给服务端。
 
 所有需要网络的命令必须能够从 Workspace 绑定或显式参数中确定服务器。无法确定时立即报错，不猜服务器。
 
@@ -113,8 +166,8 @@ GET <server_url>/.well-known/astral
   "server_id": "srv_...",
   "canonical_url": "https://astral.example.com",
   "api_base": "/api/v1",
-  "protocol_version": 1,
-  "min_cli_protocol_version": 1,
+  "protocol_version": 2,
+  "min_cli_protocol_version": 2,
   "auth": {
     "device_login": true
   }
@@ -176,6 +229,44 @@ ASTRAL_TOKEN=...
 
 后续可增加 `--token-stdin`，但禁止把 token 设计为普通命令行位置参数，以免进入 shell history 与进程列表。
 
+### 6.4 `astral register <server_url>`
+
+邀请码注册（modulator TODO §3 P3 移交项；服务端契约 `POST /auth/register` 见
+modulator docs/registration.md，协议快照 key_semantics.invite_register）：
+
+```text
+astral register <url> --invite-code XXXXX-XXXXX-XXXXX-XXXXX [--email ... --password ... --display-name ...]
+astral register <url> --bootstrap ...     # 冷启动分支：服务器尚无 human 时建首个账号
+astral register <url> ... --no-login      # 只建号，不自动登录
+```
+
+- **匿名端点**：经 discovery 后直接 POST，不带任何 Bearer（`ASTRAL_TOKEN`
+  存在与否都不影响注册）。邀请码归一化（去 `-` + 大写）是服务端职责，CLI
+  原样传；`--invite-code` 与 `--bootstrap` 互斥（exit 2），两者都缺也是
+  用法错误。
+- **交互补问**：stdin 为 TTY 时，缺失的 email / password / invite code 逐项
+  提示（提示语走 stderr，`--json` 的 stdout 契约不受污染）；密码经
+  `platform::readLineNoEcho` 不回显。非 TTY 下缺失即 USAGE（exit 2），
+  机器调用不会被挂住。`--display-name` 纯旗标不补问（可选数据，事后
+  `astral profile set` 可改）。
+- **注册成功 ≠ CLI 登录**：201 响应附带的是 HttpOnly web 会话 cookie，
+  CLI 无法消费，因此缺省自动衔接 §6.2 的 device flow（同一 server URL，
+  复用 `runDeviceFlow`）换取可落盘的 token 对；`--no-login` 跳过。自动
+  登录失败时账号已建成：保留原退出码与协议错误字段，错误消息附
+  `astral login <url>` 重试提示。
+- **错误映射（§12 状态映射的显式例外）**：注册流的契约性拒绝——400
+  INVITE_INVALID / VALIDATION_FAILED、403 bootstrap 关闭、409 EMAIL_TAKEN、
+  429 RATE_LIMITED——一律 `REGISTRATION_REJECTED` + exit 1（一般失败）。
+  理由：调用者尚不持有任何凭证，这类失败没有可机器分支的恢复动作（换码、
+  换邮箱、稍后重试），按状态映射反而会把 403 误报成鉴权失败（3）、400
+  误报成协议不兼容（9）。服务端 message/details 并入人话消息；协议码经
+  withProtocol 透传给 `--json`（`error.code=INVITE_INVALID` 等）；429 额外
+  读 Retry-After 头提示重试秒数。契约外状态（5xx 等）仍走共享映射
+  （5xx→6）。
+- **`--json` 输出**：`{"registered": <Me envelope 原样>, "logged_in": bool,
+  "session": {"server_url","server_id","principal_id"}}`（`session` 仅在
+  登录成功时出现）。
+
 ## 7. 本地凭证存储
 
 凭证保存为用户目录下的普通 JSON 文件：
@@ -191,14 +282,25 @@ Linux Secret Service）。理由：
 - 三端路径与行为完全一致，`cat` 即可查看、`cp` 即可备份，调试直观；
 - 不引入平台依赖、DBus 会话、权限弹窗，headless/CI 开箱即用。
 
-文件格式（按 `server_id` 为主键，一个文件管理多台服务器登录态）：
+文件格式（version 2，D12 分槽：human 会话按 canonical server URL 键、
+agent credential 按 `server_id` 键，互不混淆；servers 槽的生产消费方
+尚未接线，`ASTRAL_TOKEN` 环境变量优先且不落盘）：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "sessions": {
+    "https://astral.example.com": {
+      "server_id": "srv_01…",
+      "api_base": "/api/v1",
+      "principal_id": "usr_01…",
+      "access_token": "…",
+      "refresh_token": "…"
+    }
+  },
   "servers": {
     "srv_01…": {
-      "principal_id": "user_01…",
+      "principal_id": "agt_01…",
       "access_token": "…",
       "refresh_token": "…"
     }
@@ -276,81 +378,58 @@ astral init <server_url> [path] --workspace <workspace_name>
 
 `path` 默认当前目录。
 
-### 9.1 server/workspace 简写解析
+### 9.1 server/workspace 简写解析（实况，round 11 起）
 
-由于服务端未来可能部署在 URL 子路径，不能简单把最后一个 `/` 永远当 Workspace 名。解析顺序：
+v0.1 的 init **不做两阶段 discovery 回退**，要求显式给出 workspace 名，杜绝
+「URL 最后一段到底是子路径还是 workspace 名」的歧义：
 
-1. 若提供 `--workspace`，整段第一个参数都视为 server URL；
-2. 否则先把完整输入当 server URL 执行 discovery；
-3. 若 discovery 失败，再拆最后一个 path segment 为 `workspace_name`，对剩余 URL 重试 discovery；
-4. 两次 discovery 都失败则报 `SERVER_NOT_FOUND`。
+1. 若提供 `--workspace`，第一个位置参数整段视为 server URL；
+2. 否则拆出最后一个 path segment 作 workspace 名候选（仅一段时）；
+3. 两者皆无 → LOCAL_WORKSPACE_ERROR，提示 `<server>/<workspace>` 写法。
 
-因此：
-
-```text
-astral init https://astral.example.com/my-repo
-```
-
-通常解析为 server=`https://astral.example.com`、workspace=`my-repo`。
-
-若服务器本身部署在 `/astral` 且 discovery 在完整 URL 成功，则不会误拆；需要同时指定 Workspace 时使用：
+URL 先做规范化（scheme/host 小写、去根尾斜杠），保证 URL 比较与凭证主键稳定；
+服务器部署在子路径时必须用 `--workspace` 消歧：
 
 ```text
+astral init https://example.com/astral/my-repo        # server=/astral, ws=my-repo
 astral init https://example.com/astral --workspace my-repo
 ```
 
 ### 9.2 默认 Workspace 名
 
-未显式给 Workspace 时按下面顺序推导：
+**未实装**（规划项）：按 Git repo remote/目录名推导 workspace 名候选。
+当前没有 workspace 名时 init 直接报错，不做任何猜测。
 
-1. 当前 Git repo `remote.origin.url` 仓库 basename，去掉 `.git`；
-2. Git repo 根目录 basename；
-3. 待初始化目录 basename。
-
-只用于“名称候选”，最终始终解析成服务端返回的 `workspace_id`。
-
-### 9.3 初始化状态机
+### 9.3 初始化状态机（实况）
 
 ```text
-resolve target path
-  -> ensure path exists and is writable
-  -> parse/discover server
-  -> validate protocol compatibility
-  -> load credential for server_id
-  -> credential unavailable?
-       TTY human: invoke same login flow as `astral login`
-       non-TTY/--json: AUTH_REQUIRED
-  -> resolve workspace by exact name/slug or explicit id
-  -> workspace exists and accessible: continue
-  -> workspace missing:
-       TTY: ask whether to create
-       non-TTY: require --create
+parse <server_url>[/<workspace_name>] (+ --workspace)
+  -> require workspace name (no guessing; else LOCAL_WORKSPACE_ERROR)
+  -> discover server (well-known + protocol version gate)
+  -> requireSession: credentials file human session (no login invocation;
+       AUTH_REQUIRED if absent)
+  -> resolve workspace by exact name (?name= lookup)
+       found: workspace = items[0]
+       missing + --create: POST /workspaces (409 -> name taken)
+       missing without --create: WORKSPACE_NOT_FOUND (hints --create)
+  -> GET /workspaces/{id} verify visibility (non-member -> 404)
   -> inspect existing .astral/config.json
-       same binding: idempotent success
-       different binding: fail WORKSPACE_ALREADY_BOUND
-       explicit --rebind: replace after validation
+       same binding: idempotent success ("Already bound")
+       different binding: fail (hint --rebind)
+       --rebind: replace
   -> atomic write .astral/config.json
-  -> GET workspace to verify final binding
 ```
 
-`init` 可以顺手触发 Human 登录，但登录失败时绝不写半成品绑定。
-
-Workspace 创建也不能因拼写错误默默发生。交互模式需要一次明确确认；机器模式必须显式 `--create`。
+登录失败/未登录时绝不写半成品绑定。workspace 创建永不静默发生：
+非交互模式必须显式 `--create`（TTY 交互式确认未实装）。
 
 ### 9.4 典型用法
 
 ```text
-# 默认绑定当前目录，Workspace 名来自 Git repo
-astral init https://astral.example.com
-
-# 指定 Workspace
-astral init https://astral.example.com/backend
-
-# 指定本地目录
-astral init https://astral.example.com/backend ../backend
-
-# 无歧义写法
-astral init https://example.com/astral ../backend --workspace backend
+astral init https://astral.example.com/backend        # 绑定当前目录到 backend
+astral init https://example.com/astral/backend ../backend   # 指定本地目录
+astral init https://example.com/astral --workspace backend  # 子路径消歧
+astral init https://astral.example.com/todo --create  # 不存在则创建
 ```
 
 ## 10. Workspace 解析优先级
@@ -386,30 +465,57 @@ astral todo search --regex <expr> --fuzzy <text>
 regex filter -> fuzzy ranking
 ```
 
-Tag 采用“两步确认”，用于减少 Agent 随手制造重复 Tag：
+v2 容器化语义（round 16，协议快照 v2）：`todo list` 列出容器子任务——默认
+workspace 根层，`--parent <task-id>` 切到该任务的 children 集合（只回传直接
+子层，行内带 tags/children_count）；`todo add --parent <task-id>` 投递进该
+任务的 children 集合（服务端 TaskCreate 已无 parent_id 字段）；`todo search`
+走 `/workspaces/{id}/task-search` 平面查询，regex/fuzzy 与
+tag/status/assignee 平权（至少一个条件）。
+
+`claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
+GET 任务当前 revision 再提交（读改写窗口由服务端 409
+`REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过
+读取、原样提交。`list`/`search` 分页：默认单页，`--all` 跟随
+`next_cursor` 取尽；`--json` 输出单对象（含 `items` 与最终
+`next_cursor`），非流式 JSON Lines。目标解析（server/workspace）遵循
+第 10 节优先级；鉴权遵循 §6.3：`ASTRAL_TOKEN` 优先，否则 human 会话槽 +
+单次惰性刷新（D13）。
+
+Tag/msg 命令已实装（round 19）。Tag 采用“两步确认”，减少 Agent 随手制造
+重复 Tag；服务端校验 confirm code 与 actor/workspace/action/name 的绑定并
+检查过期/单次使用状态（拼写统一为 `--confirm`）。rename/delete 先经 tag
+词典按名解析 `target_tag_id`（`tag_` 前缀参数直接作 id）。服务端只做规范化
+后的精确重名约束，不用模糊相似度自动拒绝；语义近似判断仍交给调用者。
 
 ```text
-astral tags create <tagname>
+astral tags create urgent
+#   -> propose：返回 proposal_id + confirm_code + 全量 existing_tags，
+#      人读输出附带完整可复制命令行
+astral tags create urgent --proposal tgp_01… --confirm K7P4Q2
+#   -> confirm：单次使用，缺一即 USAGE 错误
 ```
 
-第一步只创建短期 proposal，并返回现有 Tag、proposal ID 与确认码，不创建正式 Tag。
+`msg send` 目标语法：`workspace`（广播）| `actor:<actor_id>` |
+`task:<task_id>`（任务线程），`--thread <msg_id>` 跟进；发送携带确定性
+Idempotency-Key（内容 FNV-1a），重跑同一命令服务端 24h 内重放首次 2xx
+不双发。`msg list --task <task_id>` 走任务线程集合端点。
+`event listen` 消费 workspace SSE 流（round 22）：stdout 每事件一行
+（--json 输出原始 envelope JSON Lines；人读模式输出 `时间 类型 ID`），
+断线/关流按指数退避重连并以 Last-Event-ID 续传，snapshot.required 后
+自动丢弃过期游标，401 经一次 lazy refresh 重放；403/404 等终态按协议
+错误码退出。`--max-events N` 消费满即干净退出（不含控制事件）。
 
-Agent/Human 检查后执行：
-
-```text
-astral tags create <tagname> --confirm <code>
-```
-
-服务端校验 code 是否绑定当前 actor、workspace、动作和 tag name，并检查过期/单次使用状态。拼写统一为 `--confirm`。
-
-Tag rename/delete 采用同类 proposal/confirm 流程。服务端只做规范化后的精确重名约束，不用模糊相似度自动拒绝；语义近似判断仍交给调用者。
+Phase-5 分层：`astral document`（见 §4）是第一层单文档命令面；第二层
+`astral sync`（FR-010 pull/push/sync 引擎：本地扫描 → manifest 分类 →
+安全拉推 → 冲突汇聚，含受管路径 include/exclude 约定——round 38 R3
+裁决该约定归本仓持有）尚未动工，不承诺任何本地 state 文件布局。
 
 ## 12. Human 输出与 Agent 输出
 
 默认输出面向人：
 
 ```text
-Bound astral-modulator -> https://astral.example.com / astral-modulator
+Bound backend -> https://astral.example.com (ws_01…)
 ```
 
 `--json`：
@@ -419,6 +525,16 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 - 不输出 ANSI 文本；
 - 错误通过稳定 `error.code` 表达；
 - 不输出 token secret。
+
+`--json` 错误 envelope（round 14 起补齐）：CLI 本地错误输出
+`{"error": {"code", "message"}}`（code 为 CLI 本地码，如
+`LOCAL_WORKSPACE_ERROR`）；来自服务端协议 envelope 的失败则透传冻结契约
+`{"error": {"code", "message", "request_id", "retryable"}}`，其中 `code` 为
+服务端稳定码（如 `TASK_ALREADY_CLAIMED`），退出码由 HTTP 状态映射
+（401/403→3、404→4、409→5、5xx→6、其余 4xx→9）。两类失败都可直接按
+`error.code` 分支。例外：`astral register` 的契约性拒绝（INVITE_INVALID /
+EMAIL_TAKEN / bootstrap 关闭 / VALIDATION_FAILED / 429）恒 exit 1 +
+`REGISTRATION_REJECTED`（协议码照常透传），理由与边界见 §6.4。
 
 建议顶层退出码：
 
@@ -438,22 +554,27 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 
 ## 13. HTTP/SSE Client
 
-`client/` 只实现公开协议：
+`client/` 只实现公开协议。已实装：
 
-- HTTPS REST/JSON；
+- HTTPS REST/JSON（libcurl）；
 - Bearer Token；
-- request ID；
-- idempotency key；
 - timeout；
-- bounded retry；
-- exponential backoff + jitter；
-- SSE reconnect + last event cursor。
+- **CLI 身份头（R2 版本协商，phase-5 轮起）**：全部 `/api/v1` 请求经
+  `auth::stampClientHeaders` 携带 `X-Astral-Client: cli` 与
+  `X-Astral-Client-Version: <kProtocolVersion>`（业务命令、whoami/init、
+  device flow 轮询、token refresh 全覆盖）；发现门（§5）按
+  `min_cli_protocol_version` 下限自查——高于本 CLI 的 protocol_version
+  只要下限覆盖就兼容，服务端对低版本头的 400
+  `CLIENT_VERSION_UNSUPPORTED` 经既有错误映射落 exit 9。
 
-只自动重试安全读请求、幂等请求，或带服务端支持 `Idempotency-Key` 的写操作。
+**未实装**（规划项，勿当现状依赖）：请求级 request ID 头、bounded retry、
+bounded retry（`event listen` 已具备退避重连 + Last-Event-ID 续传；
+其余命令为单次调用）。业务命令的写请求已在应用层携带确定性
+Idempotency-Key（msg send、document push）。
 
-401 处理顺序：
+401 处理顺序（已实装，`withLazyRefresh`）：
 
-1. 若使用凭证文件中的 refresh token 且 refresh session 可用，尝试一次 refresh；
+1. 若凭证文件中的 refresh session 可用，尝试一次 refresh；
 2. 原请求重放一次；
 3. 仍失败则返回 auth error；
 4. 不进入无限 refresh/retry 循环。
@@ -470,13 +591,11 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 ├─ cmake/
 ├─ src/
 │  ├─ app/
-│  ├─ commands/
-│  │  ├─ login/
-│  │  ├─ init/
-│  │  ├─ workspace/
-│  │  ├─ todo/
-│  │  ├─ tags/
-│  │  └─ ...
+│  ├─ commands/        # 扁平文件，一个顶层名词一个 <noun>_cmd.cpp
+│  │  ├─ login_cmd.cpp
+│  │  ├─ init_cmd.cpp
+│  │  ├─ todo_cmd.cpp / tags_cmd.cpp / msg_cmd.cpp / document_cmd.cpp / profile_cmd.cpp（随实装增加）
+│  │  └─ registry.cpp
 │  ├─ client/
 │  ├─ auth/
 │  ├─ workspace/
@@ -511,10 +630,13 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 
 ## 16. 三端发行
 
+> 执行设计与分阶段计划（R0-R5）定稿于 [DISTRIBUTION.md](DISTRIBUTION.md)，
+> 本节只保留原则；产物矩阵、glibc 基线、签名降级态以该文为准。
+
 GitHub Actions 负责：
 
 - Windows x86_64；
-- macOS arm64 + x86_64；
+- macOS arm64（x86_64 已移除：macos-13 runner 长期排队，Intel 包待交叉编译方案）；
 - Linux x86_64 + arm64；
 - Release Asset；
 - SHA-256 checksum；
@@ -538,6 +660,8 @@ Linux 需要明确最低 glibc baseline；如确有需求再增加独立 musl �
 - JSON stdout/stderr 契约；
 - regex + fuzzy 参数序列化；
 - tag proposal/confirm；
+- document content_hash 口径（NIST 向量 + CRLF 不重写）、base 指针解析、
+  409 冲突提示、空串选项语义（--body ""/--bio ""）；
 - SSE reconnect；
 - Windows/macOS/Linux build smoke；
 - 与固定 `astral-modulator` protocol snapshot 的 contract test。

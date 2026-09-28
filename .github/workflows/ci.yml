@@ -65,7 +65,9 @@ jobs:
           - { os: ubuntu-24.04, arch: x64 }
           - { os: ubuntu-24.04-arm, arch: arm64 }
           - { os: macos-latest, arch: arm64 }
-          - { os: macos-13, arch: x64 } # last Intel image; switch to cross-compile when retired
+          # macos-13（最后的 Intel 镜像）已从队列饥饿到永不调度：
+          # 连续多次 run 排队满 24h 被 GitHub 取消，整条流水线因此恒红。
+          # Intel 覆盖等真正需要时再上 osxcross 交叉编译。
           - { os: windows-2022, arch: x64 }
     runs-on: ${{ matrix.os }}
     steps:
@@ -102,9 +104,13 @@ jobs:
           "$bin" version
           "$bin" doctor --json
           set +e
+          # 未绑定目标：稳定契约是 LOCAL_WORKSPACE_ERROR -> exit 8（README
+          # 退出码表）。历史断言 -eq 1 钉的是脚手架期 todo 桩的
+          # COMMAND_NOT_IMPLEMENTED；round 14 实装后从未被跑到（CI 在更早
+          # 的门挂掉），本次随 CI 恢复一并校正。
           "$bin" --json todo list; code=$?
           set -e
-          [ "$code" -eq 1 ]
+          [ "$code" -eq 8 ]
           set +e
           "$bin" bogus; code=$?
           set -e

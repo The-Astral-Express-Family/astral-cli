@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "auth/session.hpp"
 #include "core/env.hpp"
 #include "core/error.hpp"
 #include "core/version.hpp"
@@ -67,13 +68,9 @@ public:
                     {"detail", check.detail},
                 });
             }
-            output::printJson(context.out, nlohmann::json{
-                                               {"version", core::kProjectVersion},
-                                               {"git", core::kGitDescribe},
-                                               {"platform", core::buildPlatform()},
-                                               {"protocolVersion", core::kProtocolVersion},
-                                               {"checks", array},
-                                           });
+            nlohmann::json doc = core::identityFields(/*withName=*/false);
+            doc["checks"] = array;
+            output::printJson(context.out, doc);
             return 0;
         }
 
@@ -91,8 +88,8 @@ public:
             context.out << marker << paint.key(check.name) << "  " << check.detail << "\n";
         }
         context.out << "\n"
-                    << paint.dim("network not checked: server connectivity lands with the "
-                                 "HTTP client wiring")
+                    << paint.dim("network: server probes run only when a target is known "
+                                 "(--server/ASTRAL_SERVER or a workspace binding)")
                     << "\n";
         return 0;
     }
@@ -130,10 +127,13 @@ private:
                 }
             }
             try {
-                const auto servers = store->list();
-                detail += servers.empty()
+                // login writes the sessions slot; the servers slot (agent
+                // credentials) has no producer wired yet, so counting it
+                // alone reports a false "no stored credentials".
+                const auto sessions = store->listSessions();
+                detail += sessions.empty()
                               ? ", no stored credentials"
-                              : ", " + std::to_string(servers.size()) + " server(s) logged in";
+                              : ", " + std::to_string(sessions.size()) + " server(s) logged in";
             } catch (const core::AstralError& e) {
                 status = "warn";
                 detail += std::string(" (") + e.what() + ")";
@@ -160,6 +160,30 @@ private:
         } else {
             checks.push_back(
                 {"workspace-binding", "info", "not bound (no .astral/config.json in this tree)"});
+        }
+
+        // Connectivity: probe only when a concrete target exists (env or
+        // binding); offline remains a fully valid state for doctor.
+        std::optional<std::string> server = core::env::get("ASTRAL_SERVER");
+        if (!server) {
+            if (auto bindingDir = workspace::findBindingDir(fs::current_path())) {
+                if (auto binding = workspace::readBinding(*bindingDir)) {
+                    server = binding->serverUrl;
+                }
+            }
+        }
+        if (!server) {
+            checks.push_back({"server-connectivity", "info",
+                              "no server configured (set ASTRAL_SERVER or run astral init)"});
+        } else {
+            try {
+                const auth::ServerInfo info = auth::discoverServer(*server, auth::realHttp());
+                checks.push_back({"server-connectivity", "ok",
+                                  info.baseUrl + " reachable (" + info.serverId + ")"});
+            } catch (const core::AstralError& e) {
+                checks.push_back({"server-connectivity", "warn",
+                                  *server + " unreachable: " + std::string(e.what())});
+            }
         }
 
         return checks;

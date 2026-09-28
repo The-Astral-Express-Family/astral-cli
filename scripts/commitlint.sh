@@ -13,7 +13,9 @@
 
 set -eu
 
-TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+# `protocol` is repo-specific: protocol/ snapshot sync commits
+# ("protocol: sync v1 snapshot to astral-modulator <sha>").
+TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|protocol'
 SUBJECT_MAX=100
 
 usage() {

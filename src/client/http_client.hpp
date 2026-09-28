@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -27,6 +28,14 @@ struct HttpResponse {
     std::optional<std::string> header(const std::string& name) const;
 };
 
+// Percent-encodes a single query component (spaces, '&', '=', unicode...);
+// unreserved characters stay literal. Building query strings for server
+// parameters of free-form shape (regex/fuzzy) is mandatory, not cosmetic.
+std::string urlEncode(const std::string& value);
+
+// Receives body chunks as they arrive; returning false aborts the transfer.
+using ChunkSink = std::function<bool(std::string_view chunk)>;
+
 // Thin libcurl wrapper. Bounded behavior only: no global retry loop here -
 // retry/backoff policy lives one layer up once wired to the real protocol
 // (ARCHITECTURE.md section 13).
@@ -39,8 +48,8 @@ public:
         // TLS verification is always on; a per-request escape hatch will be a
         // one-shot dev flag, never a persisted setting.
         bool verifyTls = true;
-        // Follow 3xx Location chains, capped at 5 hops: release asset
-        // downloads redirect off api.github.com. Off = raw statuses returned.
+        // 资产下载（GitHub Release 302 跳转到 objects.githubusercontent.com）需要
+        // 跟随重定向；默认开启，API 查询同样无害。
         bool followRedirects = true;
         // Extra headers sent with every request (sorted by key). Sent in
         // addition to per-request headers; callers must not set User-Agent
@@ -66,11 +75,18 @@ public:
     HttpResponse postJson(const std::string& url, const std::string& jsonBody,
                           std::optional<std::string> bearer = std::nullopt);
 
-    // Streams the body of a GET to `destination` without buffering it in
-    // memory (update asset downloads). Transport errors throw exactly like
-    // get(); a final status >= 400 throws AstralError(NETWORK_ERROR) after
-    // removing the partial file; an unopenable destination throws
-    // AstralError(LOCAL_WORKSPACE_ERROR) without touching the network.
+    // Streaming variant for long-lived endpoints (SSE). Every body chunk is
+    // passed to onChunk as it arrives; a false return aborts the transfer and
+    // the response is returned with its status (clean client stop). There is
+    // deliberately no total-response timeout; the connect timeout still
+    // applies and a stall detector (server keepalives are 15s) aborts dead
+    // connections as TIMEOUT. Non-200 bodies are buffered into response.body
+    // instead of streamed to onChunk, so error envelopes stay readable.
+    HttpResponse sendStreaming(const HttpRequest& request, const ChunkSink& onChunk);
+
+    // 流式下载响应体到文件（update 资产下载用，不占内存）。HTTP >=400 时按
+    // 现有错误路径抛 AstralError(NETWORK_ERROR) 并删除半截文件；目标路径
+    // 不可写时抛 LOCAL_WORKSPACE_ERROR（发网络请求之前）。
     HttpResponse getToFile(const std::string& url, const std::filesystem::path& destination);
 
     // 运行时可调的选项副本（如 GithubReleaseClient 注入 Accept 头）。
@@ -78,12 +94,6 @@ public:
     const Options& options() const { return options_; }
 
 private:
-    // Shared curl setup/teardown for send() and getToFile(); `bodySink` is the
-    // pointer handed to `writeBody` (response.body or an output file stream).
-    void perform(const HttpRequest& request, std::size_t (*writeBody)(char*, std::size_t,
-                                                                      std::size_t, void*),
-                 void* bodySink, HttpResponse& response);
-
     Options options_;
 };
 

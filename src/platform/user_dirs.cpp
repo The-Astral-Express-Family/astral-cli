@@ -38,7 +38,8 @@ fs::path configDir() {
 }
 
 fs::path cacheDir() {
-    return cacheDirFor(homeEnv());
+    // 与 astralHome() 同源（尊重 ASTRAL_HOME），保证 config/cache 落在同一目录树。
+    return astralHome() / "cache";
 }
 
 } // namespace astral::platform

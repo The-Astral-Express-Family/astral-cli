@@ -7,6 +7,9 @@ tests（`tests/contract/`）针对这里的固定版本运行，而不是针对�
 约定：
 
 - 每个协议版本一个子目录：`snapshots/v1/`、`snapshots/v2/`……
+- 每个快照必须带 `MANIFEST.json`：记录源仓库 commit、发布日期、
+  服务端实装状态（哪些端点是真实的、哪些还是 501 桩）与关键语义备注，
+  是 CLI 实现时的第一阅读材料；
 - 服务端发布协议变更时，同步新的 OpenAPI/Schema 快照到对应目录，
   并在 PR 中注明协议版本与变更摘要；
 - CLI 侧 bump `src/core/version.hpp.in` 里的 `kProtocolVersion` 之前，

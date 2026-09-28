@@ -5,6 +5,15 @@ namespace astral::core {
 AstralError::AstralError(Errc code, std::string message)
     : std::runtime_error(message), code_(code) {}
 
+AstralError& AstralError::withProtocol(std::string protocolCode,
+                                       std::optional<std::string> requestId,
+                                       std::optional<bool> retryable) {
+    protocolCode_ = std::move(protocolCode);
+    requestId_ = std::move(requestId);
+    retryable_ = retryable;
+    return *this;
+}
+
 std::string_view AstralError::codeString() const noexcept {
     switch (code_) {
     case Errc::AuthRequired:
@@ -27,6 +36,16 @@ std::string_view AstralError::codeString() const noexcept {
         return "TIMEOUT";
     case Errc::CommandNotImplemented:
         return "COMMAND_NOT_IMPLEMENTED";
+    case Errc::NotFound:
+        return "NOT_FOUND";
+    case Errc::Conflict:
+        return "CONFLICT";
+    case Errc::InsufficientScope:
+        return "INSUFFICIENT_SCOPE";
+    case Errc::RegistrationRejected:
+        return "REGISTRATION_REJECTED";
+    case Errc::Usage:
+        return "USAGE";
     case Errc::Internal:
         return "INTERNAL";
     case Errc::UpdateIntegrity:
@@ -38,11 +57,14 @@ std::string_view AstralError::codeString() const noexcept {
 int AstralError::exitCode() const noexcept {
     switch (code_) {
     case Errc::AuthRequired:
+    case Errc::InsufficientScope:
         return static_cast<int>(ExitCode::Auth);
     case Errc::ServerNotFound:
     case Errc::WorkspaceNotFound:
+    case Errc::NotFound:
         return static_cast<int>(ExitCode::NotFound);
     case Errc::WorkspaceAlreadyBound:
+    case Errc::Conflict:
         return static_cast<int>(ExitCode::Conflict);
     case Errc::NetworkError:
         return static_cast<int>(ExitCode::Network);
@@ -50,10 +72,15 @@ int AstralError::exitCode() const noexcept {
         return static_cast<int>(ExitCode::Timeout);
     case Errc::LocalWorkspaceError:
         return static_cast<int>(ExitCode::LocalWorkspace);
+    case Errc::Usage:
+        return static_cast<int>(ExitCode::Usage);
     case Errc::ProtocolIncompatible:
         return static_cast<int>(ExitCode::Protocol);
     case Errc::CommandNotImplemented:
     case Errc::CredentialStoreError:
+    // 注册被拒（INVITE_INVALID/EMAIL_TAKEN/bootstrap 关闭/VALIDATION_FAILED/
+    // 429）恒 exit 1：语义与理由见 register_cmd 的错误映射。
+    case Errc::RegistrationRejected:
     case Errc::Internal:
         return static_cast<int>(ExitCode::GenericFailure);
     case Errc::UpdateIntegrity:

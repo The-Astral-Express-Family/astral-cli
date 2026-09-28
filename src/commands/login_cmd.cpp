@@ -1,16 +1,38 @@
+#include <memory>
+#include <optional>
+#include <string>
+
+#include <CLI/CLI.hpp>
+#include <nlohmann/json.hpp>
+
+#include "auth/api.hpp"
+#include "auth/device_flow.hpp"
+#include "auth/session.hpp"
+#include "commands/command.hpp"
 #include "commands/login_cmd.hpp"
-
-#include <ostream>
-
 #include "core/error.hpp"
+#include "output/json_output.hpp"
+#include "platform/browser.hpp"
+#include "platform/credential_store.hpp"
 
 namespace astral::commands {
 
 namespace {
 
-// Login/logout/whoami need device-flow authorization against a live server
-// (ARCHITECTURE.md section 6). The v0.1 scaffold wires the command surface
-// and refuses cleanly instead of half-implementing an auth flow.
+// Positional > --server flag > ASTRAL_SERVER (ARCHITECTURE.md section 10).
+std::string serverArg(const CommandContext& context, const std::optional<std::string>& positional) {
+    return auth::resolveServerUrl(positional, context.server);
+}
+
+// Browser is best-effort; the manual URL/code path always goes to stderr so
+// --json keeps stdout as a single object.
+void presentUserCode(const std::string& url, const std::string& code, std::ostream& err) {
+    const bool opened = platform::openInBrowser(url);
+    err << (opened ? "browser opened for approval" : "browser unavailable") << "\n"
+        << "approve at: " << url << "\n"
+        << "user code:  " << code << "\n";
+}
+
 class LoginCommand final : public Command {
 public:
     const char* name() const override { return "login"; }
@@ -22,11 +44,25 @@ public:
     }
 
     int execute(const CommandContext& context) override {
-        (void)context;
-        throw core::AstralError(core::Errc::CommandNotImplemented,
-                                "device-flow login lands with the auth client (see "
-                                "ARCHITECTURE.md section 6); target: " +
-                                    serverUrl_);
+        const std::string baseUrl = serverArg(context, serverUrl_);
+        auto store = platform::makeDefaultCredentialStore();
+        const platform::LoginSession session =
+            auth::runDeviceFlow(baseUrl, auth::realHttp(), auth::realSleep,
+                                [&](const std::string& url, const std::string& code) {
+                                    presentUserCode(url, code, context.err);
+                                });
+        store->saveSession(session.serverUrl, session);
+
+        if (context.json) {
+            output::printJson(context.out, {{"server_url", session.serverUrl},
+                                            {"server_id", session.serverId},
+                                            {"principal_id", session.principalId}});
+            return 0;
+        }
+        context.out << "Logged in as "
+                    << (session.principalId.empty() ? "<unknown>" : session.principalId) << " on "
+                    << session.serverId << " (" << session.serverUrl << ")\n";
+        return 0;
     }
 
 private:
@@ -39,15 +75,47 @@ public:
     const char* description() const override { return "Forget credentials for a server"; }
 
     void configure(CLI::App& app) override {
-        app.add_option("server_url", serverUrl_, "Server base URL")->required();
+        app.add_option("server_url", serverUrl_,
+                       "Server base URL (default: --server/ASTRAL_SERVER)");
     }
 
     int execute(const CommandContext& context) override {
-        (void)context;
-        throw core::AstralError(core::Errc::CommandNotImplemented,
-                                "logout lands with the auth client; it will erase the server "
-                                "entry in ~/.astral-cli/credentials.json; target: " +
-                                    serverUrl_);
+        const std::string baseUrl = serverArg(context, serverUrl_);
+        auto store = platform::makeDefaultCredentialStore();
+        const auto session = store->loadSession(baseUrl);
+        if (!session) {
+            if (context.json) {
+                output::printJson(context.out, {{"logged_out", false}, {"server_url", baseUrl}});
+            } else {
+                context.out << "Not logged in to " << baseUrl << "\n";
+            }
+            return 0;
+        }
+
+        // Revoke server-side, then drop the local pair regardless (the local
+        // session is worthless once logout intent is expressed).
+        try {
+            const auth::HttpFn http = auth::realHttp();
+            client::HttpRequest request;
+            request.method = "POST";
+            request.url = auth::ServerInfo{session->serverUrl, "", session->apiBase}.origin() +
+                          session->apiBase + "/auth/logout";
+            // nlohmann 序列化：refresh token 走 base64url，但构造不再依赖
+            // token 字符集假设（手拼 JSON 对引号/反斜杠不安全）。
+            request.body = nlohmann::json{{"refresh_token", session->refreshToken}}.dump();
+            (void)http(request);
+        } catch (const core::AstralError& error) {
+            context.err << "warning: server-side logout failed (" << error.what()
+                        << "); local session removed anyway\n";
+        }
+        store->eraseSession(baseUrl);
+
+        if (context.json) {
+            output::printJson(context.out, {{"logged_out", true}, {"server_url", baseUrl}});
+        } else {
+            context.out << "Logged out of " << baseUrl << "\n";
+        }
+        return 0;
     }
 
 private:
@@ -62,15 +130,50 @@ public:
     }
 
     void configure(CLI::App& app) override {
-        app.add_option("server_url", serverUrl_, "Server base URL (default: bound server)");
+        app.add_option("server_url", serverUrl_,
+                       "Server base URL (default: --server/ASTRAL_SERVER)");
     }
 
     int execute(const CommandContext& context) override {
-        (void)context;
-        const std::string target =
-            serverUrl_.empty() ? context.server.value_or("<bound server>") : serverUrl_;
-        throw core::AstralError(core::Errc::CommandNotImplemented,
-                                "whoami lands with the auth client; target: " + target);
+        const std::string baseUrl = serverArg(context, serverUrl_);
+        auto store = platform::makeDefaultCredentialStore();
+        platform::LoginSession session = auth::requireSession(*store, baseUrl);
+
+        const auth::ServerInfo server = auth::discoverServer(baseUrl, auth::commandHttp());
+        // Session-only identity probe (never ASTRAL_TOKEN), one lazy refresh.
+        const std::string meUrl = server.origin() + server.apiBase + "/auth/me";
+        const client::HttpResponse response = auth::sessionGet(*store, session, meUrl);
+        if (response.status == 404) {
+            throw core::AstralError(core::Errc::ServerNotFound,
+                                    "no astral API at " + server.origin() + server.apiBase);
+        }
+        if (response.status != 200) {
+            throw core::AstralError(core::Errc::ProtocolIncompatible,
+                                    "/auth/me returned status " + std::to_string(response.status));
+        }
+        const nlohmann::json body = nlohmann::json::parse(response.body);
+        const nlohmann::json& actor = body.at("actor");
+        // Me envelope (snapshot v2.1): email rides top-level and only for
+        // human actors; agent/service sessions omit it.
+        const std::string email = body.value("email", std::string());
+
+        if (context.json) {
+            nlohmann::json payload = {{"server_url", session.serverUrl},
+                                      {"server_id", session.serverId},
+                                      {"actor", actor}};
+            if (!email.empty()) {
+                payload["email"] = email;
+            }
+            output::printJson(context.out, payload);
+            return 0;
+        }
+        context.out << actor.value("display_name", "<unknown>") << " (" << session.principalId
+                    << ", " << actor.value("kind", "unknown") << ") on " << session.serverUrl
+                    << "\n";
+        if (!email.empty()) {
+            context.out << "email:  " << email << "\n";
+        }
+        return 0;
     }
 
 private:
