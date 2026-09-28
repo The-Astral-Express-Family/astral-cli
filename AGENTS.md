@@ -29,3 +29,14 @@
 - 发版流程：bump `CMakeLists.txt` VERSION → 打 `vX.Y.Z`（可带 prerelease 后缀，
   如 `-rc.1`/`-alpha.1`）→ release.yml 校验/构建/发布；tag 与 VERSION 数字核心
   必须一致。**正式 tag 不可删除重打**（演习期除外）。
+
+## 推送前验证（2026-09-28 教训固化）
+
+pre-commit hook 只检查暂存文件，**无法覆盖**：子代理 worktree 的提交、
+合并冲突手工解决、直接编辑后未 add 的文件。因此：
+
+- **推 main 前**：开一个验证子代理本地跑完 CI 的全部检查（clang-format
+  全仓 dry-run、dev/ci 双 preset 构建+测试、YAML/sh 语法、
+  `istreambuf_iterator` 零使用、git status 干净），裁决 PUSH 才推。
+- 修 CI 红的提交同样走这道闸。
+- 禁用 `istreambuf_iterator`（GCC 13 -O3 误报），读文件用 seekg/tellg/read。
