@@ -1,4 +1,5 @@
 add_executable(astral-unit-tests
+  support/no_browser.cpp
   test_archive.cpp
   test_binding.cpp
   test_cli.cpp
