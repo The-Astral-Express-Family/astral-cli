@@ -211,8 +211,17 @@ public:
         }
         std::string actualHash;
         {
-            std::string bytes((std::istreambuf_iterator<char>(archiveIn)),
-                              std::istreambuf_iterator<char>());
+            // GCC 13 -O3 对 istreambuf_iterator 有 -Wnull-dereference 误报
+            // （CI 的 -Werror 直接判死）；改用 seekg/tellg/read 读整个文件。
+            std::string bytes;
+            archiveIn.seekg(0, std::ios::end);
+            const auto size = archiveIn.tellg();
+            if (size > 0) {
+                bytes.resize(static_cast<std::size_t>(size));
+                archiveIn.seekg(0, std::ios::beg);
+                archiveIn.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                bytes.resize(static_cast<std::size_t>(archiveIn.gcount()));
+            }
             actualHash = picosha2::hash256_hex_string(bytes);
         }
         for (char& c : actualHash) {
