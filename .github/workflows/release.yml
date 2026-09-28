@@ -86,7 +86,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="astral-${version}-${ASTRAL_TARGET}"
-          mkdir -p "staging/${name}"
+          mkdir -p "staging/${name}" dist
           cp build/ci/astral "staging/${name}/"
           cp LICENSE README.md "staging/${name}/"
           tar -czf "dist/${name}.tar.gz" -C staging "${name}"
@@ -98,6 +98,7 @@ jobs:
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $name = "astral-$version-$env:ASTRAL_TARGET"
           New-Item -ItemType Directory -Force "staging/$name" | Out-Null
+          New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build/ci/astral.exe "staging/$name/"
           Copy-Item LICENSE, README.md "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
