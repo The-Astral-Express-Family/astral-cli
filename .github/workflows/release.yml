@@ -19,8 +19,11 @@ jobs:
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME#v}"
+          # project(VERSION) 只接受纯数字 X.Y.Z；tag 可额外携带 prerelease 后缀
+          # （-rc.1 等），比对时只核对数字核心，后缀会完整烙入二进制。
+          TAG_CORE="${TAG%%-*}"
           PROJ="$(grep -m1 -oP 'VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)"
-          [ "$TAG" = "$PROJ" ] || { echo "::error::tag v$TAG != project VERSION $PROJ; bump CMakeLists.txt first"; exit 1; }
+          [ "$TAG_CORE" = "$PROJ" ] || { echo "::error::tag v$TAG (core $TAG_CORE) != project VERSION $PROJ; bump CMakeLists.txt first"; exit 1; }
 
   build:
     name: Build ${{ matrix.target }}
