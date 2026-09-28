@@ -24,8 +24,7 @@ std::string testServer() {
 // otherwise the public GitHub API (the real update-flow download host).
 std::string downloadUrl() {
     const std::string server = testServer();
-    return server.empty() ? std::string("https://api.github.com/")
-                          : server + "/.well-known/astral";
+    return server.empty() ? std::string("https://api.github.com/") : server + "/.well-known/astral";
 }
 
 // URL that answers with an HTTP error status on both target kinds.
@@ -43,7 +42,17 @@ void removeQuietly(const std::filesystem::path& path) {
 
 std::string readFile(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    // GCC 13 -O3 误报规避：istreambuf_iterator -> seekg/tellg/read。
+    std::string bytes;
+    file.seekg(0, std::ios::end);
+    const auto size = file.tellg();
+    if (size > 0) {
+        bytes.resize(static_cast<std::size_t>(size));
+        file.seekg(0, std::ios::beg);
+        file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        bytes.resize(static_cast<std::size_t>(file.gcount()));
+    }
+    return bytes;
 }
 
 } // namespace

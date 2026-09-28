@@ -85,7 +85,17 @@ void writeFile(const fs::path& path, const std::string& content) {
 
 std::string readFile(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    // GCC 13 -O3 误报规避：istreambuf_iterator -> seekg/tellg/read。
+    std::string bytes;
+    in.seekg(0, std::ios::end);
+    const auto size = in.tellg();
+    if (size > 0) {
+        bytes.resize(static_cast<std::size_t>(size));
+        in.seekg(0, std::ios::beg);
+        in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        bytes.resize(static_cast<std::size_t>(in.gcount()));
+    }
+    return bytes;
 }
 
 } // namespace
