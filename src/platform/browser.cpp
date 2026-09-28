@@ -1,6 +1,7 @@
 #include "platform/browser.hpp"
 
-#include <cstdlib>
+#include <core/env.hpp>
+
 #include <string_view>
 
 #ifdef _WIN32
@@ -20,7 +21,7 @@ bool openInBrowser(const std::string& url) {
     // 测试/CI 逃生开关：单元测试会走到 device-flow 呈现路径（api.test 假域名），
     // ctest 控制台下 stdin 是 TTY，缺门会真实拉起用户浏览器（2026-09-28 事故）。
     // 非 TTY 与 interactive 门已各有判断，这里是最后一道硬闸。
-    if (const char* gate = std::getenv("ASTRAL_NO_BROWSER"); gate != nullptr && *gate != 0) {
+    if (core::env::get("ASTRAL_NO_BROWSER").has_value()) {
         return false;
     }
 #ifdef _WIN32
