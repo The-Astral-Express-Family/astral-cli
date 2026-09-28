@@ -1,5 +1,4 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/skip.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -9,6 +8,7 @@
 #include <system_error>
 
 #include "client/http_client.hpp"
+#include "core/error.hpp"
 
 using astral::client::HttpClient;
 using astral::client::HttpResponse;

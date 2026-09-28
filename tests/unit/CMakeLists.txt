@@ -13,6 +13,7 @@ add_executable(astral-unit-tests
   test_semver.cpp
   test_sse.cpp
   test_target.cpp
+  test_update_cmd.cpp
   test_user_dirs.cpp
 )
 

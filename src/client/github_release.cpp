@@ -64,8 +64,26 @@ ReleaseInfo parseReleaseJson(const std::string& jsonText) {
 GithubReleaseClient::GithubReleaseClient(HttpClient& http) : http_(http) {}
 
 ReleaseInfo GithubReleaseClient::latest(std::string_view repo) {
-    return fetchRelease(std::string(kGitHubApiBase) + "/" + std::string(repo) + "/releases/latest",
-                        "latest");
+    // /releases/latest 的 404 语义是“该仓库还没有任何 release”（或仓库不存在），
+    // 与按 tag 查询的 404（“该版本不存在”）区分开。
+    const std::string url =
+        std::string(kGitHubApiBase) + "/" + std::string(repo) + "/releases/latest";
+    const HttpResponse response = http_.get(url);
+    if (response.status == 404) {
+        throw core::AstralError(core::Errc::ServerNotFound,
+                                "no releases published yet for " + std::string(repo) +
+                                    " (or repository not found)");
+    }
+    if (response.status == 403) {
+        throw core::AstralError(core::Errc::NetworkError,
+                                "GitHub API rate limit exceeded (HTTP 403): " + url);
+    }
+    if (response.status < 200 || response.status >= 300) {
+        throw core::AstralError(core::Errc::NetworkError,
+                                "GitHub request failed (HTTP " + std::to_string(response.status) +
+                                    "): " + url);
+    }
+    return parseReleaseJson(response.body);
 }
 
 ReleaseInfo GithubReleaseClient::byTag(std::string_view repo, std::string_view tag) {

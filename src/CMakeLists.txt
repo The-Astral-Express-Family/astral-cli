@@ -10,6 +10,7 @@ add_library(astral_core STATIC
   commands/init_cmd.cpp
   commands/login_cmd.cpp
   commands/registry.cpp
+  commands/update_cmd.cpp
   commands/version_cmd.cpp
   core/distribution.cpp
   core/env.cpp

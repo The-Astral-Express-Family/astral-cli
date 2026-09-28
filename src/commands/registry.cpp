@@ -7,6 +7,7 @@
 #include "commands/doctor_cmd.hpp"
 #include "commands/init_cmd.hpp"
 #include "commands/login_cmd.hpp"
+#include "commands/update_cmd.hpp"
 #include "commands/version_cmd.hpp"
 #include "core/error.hpp"
 
@@ -77,6 +78,7 @@ std::vector<std::unique_ptr<Command>> makeBuiltinCommands() {
         "agent", "Manage agent credentials and sessions",
         std::vector<std::string>{"list", "register", "revoke"}));
     commands.push_back(makeDoctorCommand());
+    commands.push_back(makeUpdateCommand());
     commands.push_back(makeVersionCommand());
     return commands;
 }
