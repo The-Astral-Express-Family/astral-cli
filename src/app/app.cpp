@@ -68,7 +68,7 @@ int dispatchCommand(commands::Command& command, const GlobalOptions& options, st
 
 int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
     CLI::App app{"astral - client for Astral servers", "astral"};
-    app.set_version_flag("-v,--version", std::string(core::kProjectVersion));
+    app.set_version_flag("-v,--version", core::versionString());
     app.require_subcommand(1);
     // Global flags stay usable after the subcommand (e.g. `astral todo list
     // --json`), matching what users expect from modern CLIs.
@@ -104,7 +104,7 @@ int runApp(int argc, char** argv, std::ostream& out, std::ostream& err) {
         err << app.help();
         return static_cast<int>(core::ExitCode::Success);
     } catch (const CLI::CallForVersion& version) {
-        out << "astral " << core::kProjectVersion << " (" << core::buildPlatform() << ", protocol "
+        out << "astral " << core::versionString() << " (" << core::buildPlatform() << ", protocol "
             << core::kProtocolVersion << ")\n";
         (void)version;
         return static_cast<int>(core::ExitCode::Success);
