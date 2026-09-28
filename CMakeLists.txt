@@ -54,8 +54,11 @@ endif()
 find_package(CLI11 CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(fmt CONFIG REQUIRED)
+find_package(LibArchive REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+# picosha2 的 vcpkg port 只安装裸头文件（无 CMake config），按 header-only 处理。
+find_path(PICOSHA2_INCLUDE_DIR picosha2.h REQUIRED)
 
 add_subdirectory(src)
 

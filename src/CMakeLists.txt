@@ -20,6 +20,7 @@ add_library(astral_core STATIC
   output/json_output.cpp
   output/style.cpp
   output/tty.cpp
+  platform/archive.cpp
   platform/browser.cpp
   platform/credential_store.cpp
   platform/self_update.cpp
@@ -38,10 +39,13 @@ target_include_directories(astral_core PUBLIC
 target_link_libraries(astral_core PUBLIC
   CLI11::CLI11
   CURL::libcurl
+  LibArchive::LibArchive
   fmt::fmt
   nlohmann_json::nlohmann_json
   spdlog::spdlog
 )
+# picosha2 为 header-only，仅暴露头文件路径供 Task 9 使用。
+target_include_directories(astral_core SYSTEM PUBLIC ${PICOSHA2_INCLUDE_DIR})
 astral_set_warnings(astral_core)
 
 add_executable(astral app/main.cpp)

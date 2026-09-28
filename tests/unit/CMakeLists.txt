@@ -1,4 +1,5 @@
 add_executable(astral-unit-tests
+  test_archive.cpp
   test_binding.cpp
   test_cli.cpp
   test_distribution.cpp

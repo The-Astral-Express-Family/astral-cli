@@ -8,7 +8,9 @@
     "cli11",
     "curl",
     "fmt",
+    "libarchive",
     "nlohmann-json",
+    "picosha2",
     "spdlog"
   ],
   "features": {
