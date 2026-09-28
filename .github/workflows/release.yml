@@ -50,6 +50,10 @@ jobs:
 
       - name: Set up vcpkg
         uses: ./.github/actions/setup-vcpkg
+        with:
+          # 进二进制缓存键（见 action 内注释）；与 ci.yml 同 triplet，两
+          # 条流水线共享同一份包归档缓存。
+          triplet: ${{ matrix.triplet }}
 
       - name: Configure, build, test
         shell: bash

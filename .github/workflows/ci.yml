@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同 ref 新提交自动取消旧运行（Windows 矩阵项全量构建最贵，别让被取代的跑完）。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -83,6 +88,9 @@ jobs:
 
       - name: Set up vcpkg
         uses: ./.github/actions/setup-vcpkg
+        with:
+          # 进二进制缓存键（见 action 内注释）；非 Windows 矩阵项为空串。
+          triplet: ${{ matrix.triplet }}
 
       - name: Configure
         shell: bash
