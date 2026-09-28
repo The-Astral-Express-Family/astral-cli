@@ -30,7 +30,17 @@ fs::path makeTempDir() {
 
 std::string readFile(const fs::path& file) {
     std::ifstream input(file, std::ios::binary);
-    return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    // GCC 13 -O3 误报规避：istreambuf_iterator -> seekg/tellg/read。
+    std::string bytes;
+    input.seekg(0, std::ios::end);
+    const auto size = input.tellg();
+    if (size > 0) {
+        bytes.resize(static_cast<std::size_t>(size));
+        input.seekg(0, std::ios::beg);
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        bytes.resize(static_cast<std::size_t>(input.gcount()));
+    }
+    return bytes;
 }
 
 struct Member {

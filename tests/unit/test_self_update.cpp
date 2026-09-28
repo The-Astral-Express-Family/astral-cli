@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 
+#include "core/env.hpp"
 #include "platform/self_update.hpp"
 
 // 注意：HOME 变异用例修改进程环境，catch_discover_tests 逐进程串行执行；
@@ -53,8 +54,10 @@ public:
 
 private:
     static bool readEnv(const char* name, std::string& out) {
-        if (const char* value = std::getenv(name)) {
-            out = value;
+        // MSVC 对 std::getenv 有 C4996 弃用告警（CI /WX 判死）；
+        // 统一走项目的 core::env 抽象（Windows 侧宽字符转换）。
+        if (auto value = astral::core::env::get(name)) {
+            out = *value;
             return true;
         }
         return false;
