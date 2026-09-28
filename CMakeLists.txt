@@ -20,15 +20,14 @@ if(MSVC)
 endif()
 
 # CRT 链接方式跟随 vcpkg triplet：x64-windows-static 的依赖全是 /MT，
-# 本项目对象若留在默认 /MD，链接即 LNK2038 RuntimeLibrary mismatch
-# （静态 triplet 首编实测）。CMP0091 在 cmake_minimum_required(3.25) 下
-# 为 NEW，此变量在目标创建时生效；非 Windows/vcpkg 构建为无害空操作。
-if(DEFINED VCPKG_CRT_LINKAGE)
-  if(VCPKG_CRT_LINKAGE STREQUAL "static")
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-  else()
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-  endif()
+# 本项目对象若留在默认 /MD，链接即 LNK2038 RuntimeLibrary mismatch。
+# 判据必须是 VCPKG_TARGET_TRIPLET：VCPKG_CRT_LINKAGE 是 vcpkg 工具侧的
+# portfile 变量，toolchain 不导出到消费者 configure 作用域，拿它判断
+# 永远不成立（e89a111 首编 CI 实测 LNK2038 的根因）。CMP0091 在
+# cmake_minimum_required(3.25) 下为 NEW，此变量在目标创建时生效；
+# 非 Windows/vcpkg 构建与动态 triplet 均保持 CMP0091 默认（/MD）。
+if(VCPKG_TARGET_TRIPLET MATCHES "-static")
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 include(cmake/PreventInSourceBuilds.cmake)
