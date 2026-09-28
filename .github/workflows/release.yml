@@ -123,7 +123,9 @@ jobs:
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
             tar -xzf "dist/${name}.tar.gz" -C verify
           else
-            tar -xf "dist/${name}.zip" -C verify
+            # shell: bash 的 PATH 先命中 Git 自带 GNU tar，读不了 zip；
+            # 只有 Windows 系统自带的 bsdtar 支持，显式走 System32。
+            "$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -xf "dist/${name}.zip" -C verify
           fi
           bin="verify/${name}/astral"
           [ "${{ matrix.archive }}" = "zip" ] && bin="verify/${name}/astral.exe"
