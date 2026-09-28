@@ -25,8 +25,9 @@ struct ReleaseInfo {
 ReleaseInfo parseReleaseJson(const std::string& json);
 
 // Fetches a GitHub release description for <repo> ("owner/name"). The
-// underlying HttpClient already sends the astral-cli user agent (Options) and
-// GitHub returns JSON for these endpoints without a custom Accept header.
+// underlying HttpClient sends the astral-cli user agent (Options) plus the
+// versioned Accept: application/vnd.github+json media type (set on the
+// client's options at construction).
 // Status mapping: 404 -> SERVER_NOT_FOUND ("version <tag> not found"),
 // 403 -> NETWORK_ERROR with a rate-limit hint, other HTTP failures and
 // transport errors -> NETWORK_ERROR (transport errors surface as-is).

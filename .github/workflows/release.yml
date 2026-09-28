@@ -65,7 +65,13 @@ jobs:
           build/ci/astral version
           build/ci/astral doctor --json
           out=$(build/ci/astral version --json); echo "$out" | grep -q '"name":"astral"'
-          build/ci/astral update --check --json | grep -F '"latest"'
+          # 首个 tag 发布前 /releases/latest 尚为 404（exit 4 + 明确消息），
+          # 这是合法终态；之后的发版才要求命中 "latest" 键。
+          if build/ci/astral update --check --json > /tmp/update-check.json 2>&1; then
+            grep -F '"latest"' /tmp/update-check.json
+          else
+            grep -F 'no releases published' /tmp/update-check.json
+          fi
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             build/ci/astral version | grep -F "${GITHUB_REF_NAME}"
           fi

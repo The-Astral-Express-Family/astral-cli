@@ -433,6 +433,7 @@ Bound astral-modulator -> https://astral.example.com / astral-modulator
 7 timeout
 8 local workspace error
 9 incompatible protocol/client
+10 update/supply-chain integrity failure
 ```
 
 ## 13. HTTP/SSE Client

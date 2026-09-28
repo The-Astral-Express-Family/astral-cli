@@ -61,7 +61,11 @@ ReleaseInfo parseReleaseJson(const std::string& jsonText) {
     return info;
 }
 
-GithubReleaseClient::GithubReleaseClient(HttpClient& http) : http_(http) {}
+GithubReleaseClient::GithubReleaseClient(HttpClient& http) : http_(http) {
+    // 规格 §3：GitHub API 走版本化 media type（对 releases 端点非必需，但稳定且
+    // 让 Options::headers 有真实消费者）。
+    http_.options().headers["Accept"] = "application/vnd.github+json";
+}
 
 ReleaseInfo GithubReleaseClient::latest(std::string_view repo) {
     // /releases/latest 的 404 语义是“该仓库还没有任何 release”（或仓库不存在），

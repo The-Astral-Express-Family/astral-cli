@@ -39,7 +39,7 @@ powershell -c "iwr -useb https://raw.githubusercontent.com/The-Astral-Express-Fa
 - 安装位置：POSIX 为 `~/.local/bin/astral`；Windows 为 `%LOCALAPPDATA%\Programs\astral\astral.exe`（自动追加用户 PATH，重开终端生效）。
 - 装指定版本：`ASTRAL_VERSION=v0.2.1 sh install.sh`（或 PowerShell 里 `$env:ASTRAL_VERSION='v0.2.1'`）。
 - 自定义 POSIX 安装目录：`ASTRAL_INSTALL_DIR=/custom/bin sh install.sh`（注意：非约定位置安装的二进制不可 `astral update` 自更新）。
-- 脚本依赖仅 curl/tar/sha256sum（POSIX）或系统自带 PowerShell cmdlet（Windows），自动识别 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` 环境变量。
+- 脚本依赖仅 curl/tar/sha256sum（POSIX）或系统自带 PowerShell cmdlet（Windows）。代理：POSIX 版经 curl 自动识别 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` 环境变量；Windows 版遵循系统代理设置（WinINET）。
 
 ### 包管理器
 

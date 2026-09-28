@@ -73,6 +73,10 @@ public:
     // AstralError(LOCAL_WORKSPACE_ERROR) without touching the network.
     HttpResponse getToFile(const std::string& url, const std::filesystem::path& destination);
 
+    // 运行时可调的选项副本（如 GithubReleaseClient 注入 Accept 头）。
+    Options& options() { return options_; }
+    const Options& options() const { return options_; }
+
 private:
     // Shared curl setup/teardown for send() and getToFile(); `bodySink` is the
     // pointer handed to `writeBody` (response.body or an output file stream).
