@@ -26,6 +26,7 @@
 - vcpkg 依赖必须走 manifest（`vcpkg.json`）+ baseline 锁定。
 - 代理环境变量（`HTTP_PROXY` 等）依赖 libcurl 默认行为，**禁止**设置任何
   `CURLOPT_PROXY*`。
+- 本地跑测试永不真开浏览器：单测 listener 常设 `ASTRAL_NO_BROWSER=1`（platform/browser.hpp 契约），新增会走到 device-flow 呈现路径的测试不得绕过该闸。
 - 发版流程：bump `CMakeLists.txt` VERSION → 打 `vX.Y.Z`（可带 prerelease 后缀，
   如 `-rc.1`/`-alpha.1`）→ release.yml 校验/构建/发布；tag 与 VERSION 数字核心
   必须一致。**正式 tag 不可删除重打**（演习期除外）。
