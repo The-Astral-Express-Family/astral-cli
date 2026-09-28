@@ -74,18 +74,18 @@ ReleaseInfo GithubReleaseClient::latest(std::string_view repo) {
         std::string(kGitHubApiBase) + "/" + std::string(repo) + "/releases/latest";
     const HttpResponse response = http_.get(url);
     if (response.status == 404) {
-        throw core::AstralError(core::Errc::ServerNotFound,
-                                "no releases published yet for " + std::string(repo) +
-                                    " (or repository not found)");
+        throw core::AstralError(core::Errc::ServerNotFound, "no releases published yet for " +
+                                                                std::string(repo) +
+                                                                " (or repository not found)");
     }
     if (response.status == 403) {
         throw core::AstralError(core::Errc::NetworkError,
                                 "GitHub API rate limit exceeded (HTTP 403): " + url);
     }
     if (response.status < 200 || response.status >= 300) {
-        throw core::AstralError(core::Errc::NetworkError,
-                                "GitHub request failed (HTTP " + std::to_string(response.status) +
-                                    "): " + url);
+        throw core::AstralError(core::Errc::NetworkError, "GitHub request failed (HTTP " +
+                                                              std::to_string(response.status) +
+                                                              "): " + url);
     }
     return parseReleaseJson(response.body);
 }
@@ -106,9 +106,9 @@ ReleaseInfo GithubReleaseClient::fetchRelease(const std::string& url, const std:
                                 "GitHub API rate limit exceeded (HTTP 403): " + url);
     }
     if (response.status < 200 || response.status >= 300) {
-        throw core::AstralError(core::Errc::NetworkError,
-                                "GitHub request failed (HTTP " + std::to_string(response.status) +
-                                    "): " + url);
+        throw core::AstralError(core::Errc::NetworkError, "GitHub request failed (HTTP " +
+                                                              std::to_string(response.status) +
+                                                              "): " + url);
     }
     return parseReleaseJson(response.body);
 }

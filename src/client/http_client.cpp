@@ -280,7 +280,6 @@ HttpResponse HttpClient::sendStreaming(const HttpRequest& request, const ChunkSi
     return response;
 }
 
-
 namespace {
 
 // 流式写文件回调：写失败时返回短计数，curl 以 CURLE_WRITE_ERROR 中止，
@@ -342,8 +341,7 @@ HttpResponse HttpClient::getToFile(const std::string& url,
     if (response.status >= 400) {
         removePartial();
         throw core::AstralError(core::Errc::NetworkError,
-                                "HTTP " + std::to_string(response.status) + " downloading " +
-                                    url);
+                                "HTTP " + std::to_string(response.status) + " downloading " + url);
     }
     return response;
 }
