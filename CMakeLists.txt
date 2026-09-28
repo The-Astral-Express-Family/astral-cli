@@ -19,6 +19,18 @@ if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
+# CRT 链接方式跟随 vcpkg triplet：x64-windows-static 的依赖全是 /MT，
+# 本项目对象若留在默认 /MD，链接即 LNK2038 RuntimeLibrary mismatch
+# （静态 triplet 首编实测）。CMP0091 在 cmake_minimum_required(3.25) 下
+# 为 NEW，此变量在目标创建时生效；非 Windows/vcpkg 构建为无害空操作。
+if(DEFINED VCPKG_CRT_LINKAGE)
+  if(VCPKG_CRT_LINKAGE STREQUAL "static")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+  endif()
+endif()
+
 include(cmake/PreventInSourceBuilds.cmake)
 include(cmake/StaticAnalyzers.cmake)
 include(cmake/Warnings.cmake)
