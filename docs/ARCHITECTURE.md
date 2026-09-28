@@ -635,7 +635,8 @@ Idempotency-Key（msg send、document push）。
 
 GitHub Actions 负责：
 
-- Windows x86_64；
+- Windows x86_64（`x64-windows-static` 静态 CRT + 静态第三方库，
+  2026-09-28 起：单 exe 自包含；CI dumpbin 门 + release 解包冒烟双防回归）；
 - macOS arm64（x86_64 已移除：macos-13 runner 长期排队，Intel 包待交叉编译方案）；
 - Linux x86_64 + arm64；
 - Release Asset；

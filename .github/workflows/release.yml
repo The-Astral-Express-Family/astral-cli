@@ -38,7 +38,7 @@ jobs:
           - { os: macos-latest, target: macos-arm64, archive: tar.gz }
           # macos-13（Intel/x64）已随 ci.yml 移除：排队满 24h 必被取消，
           # release 流水线会同样卡死。Intel 包待 osxcross 交叉编译方案。
-          - { os: windows-2022, target: windows-x64, archive: zip }
+          - { os: windows-2022, target: windows-x64, archive: zip, triplet: x64-windows-static }
     env:
       ASTRAL_TARGET: ${{ matrix.target }}
     steps:
@@ -55,11 +55,15 @@ jobs:
         shell: bash
         run: |
           # Tag builds embed the release tag; workflow_dispatch keeps the default v$PROJECT_VERSION.
+          flags=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            cmake --preset ci -DASTRAL_EMBED_VERSION="${GITHUB_REF_NAME}"
-          else
-            cmake --preset ci
+            flags="-DASTRAL_EMBED_VERSION=${GITHUB_REF_NAME}"
           fi
+          # 静态 triplet（与 ci.yml 同源决策）：发行物单 exe 自包含。
+          if [ -n "${{ matrix.triplet }}" ]; then
+            flags="$flags -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"
+          fi
+          cmake --preset ci $flags
           cmake --build --preset ci
           ctest --preset ci
 
@@ -102,6 +106,25 @@ jobs:
           Copy-Item build/ci/astral.exe "staging/$name/"
           Copy-Item LICENSE, README.md "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
+
+      - name: Packaged smoke (extract from archive, run)
+        shell: bash
+        run: |
+          # 防回归关键步：从发行 archive 解包运行（而非构建树）——构建树旁有
+          # vcpkg 拷贝的 DLL 时动态产物也能跑，正是 alpha.1~5 坏包漏网的缝隙。
+          # Windows 的 tar 是 bsdtar，可直接解 zip。
+          version="${GITHUB_REF_NAME#v}"
+          name="astral-${version}-${ASTRAL_TARGET}"
+          rm -rf verify && mkdir verify
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            tar -xzf "dist/${name}.tar.gz" -C verify
+          else
+            tar -xf "dist/${name}.zip" -C verify
+          fi
+          bin="verify/${name}/astral"
+          [ "${{ matrix.archive }}" = "zip" ] && bin="verify/${name}/astral.exe"
+          "$bin" version
+          "$bin" version --json | grep -F '"name":"astral"'
 
       - uses: actions/upload-artifact@v4
         with:

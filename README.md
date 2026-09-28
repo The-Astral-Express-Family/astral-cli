@@ -123,6 +123,11 @@ cmake --preset asan && cmake --build --preset asan         # AddressSanitizer + 
 可选开关：`-DASTRAL_ENABLE_INTEGRATION_TESTS=ON`（需 `ASTRAL_TEST_SERVER` 指向活服务器）、
 `-DASTRAL_ENABLE_CONTRACT_TESTS=ON`（协议快照契约测试）、`-DASTRAL_ENABLE_CLANG_TIDY=ON`。
 
+Windows 本地 vcpkg 构建请与 CI/发行同款加
+`-DVCPKG_TARGET_TRIPLET=x64-windows-static`（静态 CRT + 静态第三方库，
+单 exe 自包含）；CI 的 dumpbin 门与 release 的解包冒烟都按全静态断言，
+动态产物会被拒。
+
 试运行：
 
 ```bash

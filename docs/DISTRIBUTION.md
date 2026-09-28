@@ -25,9 +25,9 @@ alpha 连发：
 
 | # | 缺口 | 严重度（2026-09-28） |
 |---|---|---|
-| G1 | Windows 走默认 `x64-windows` 动态 triplet，zip 只拷 `astral.exe`——**已实锤**：下载 v0.1.1-alpha.5 的 windows-x64.zip 检查，内含 1.07MB exe + LICENSE + README，零 DLL，干净机器不可运行；5 个 alpha 全部带病发布 | **阻塞（已发生）** |
+| G1 | ~~Windows 动态 triplet 缺 DLL~~ **2026-09-28 已修**：CI/release 矩阵切 `x64-windows-static`（静态 CRT，单 exe 自包含），dumpbin 门 + release 解包冒烟双防回归；存量 alpha.1~5 仍是坏包，下次 tag 才体现 | 已闭合（待下次 tag 验证） |
 | G2 | ~~版本号双轨~~ ✅ 已修：release workflow 构建前校验 tag↔VERSION，版本烙入 `-DASTRAL_EMBED_VERSION` | 已闭合 |
-| G3 | packaged-binary smoke 缺失：smoke 仍只打 `build/ci/` 构建树产物（vcpkg applocal 把 DLL 拷到构建目录旁边，所以 runner 上能跑——archive 缺 DLL 正因此漏网），未从 archive 解包验证 | **阻塞（G1 的检测面）** |
+| G3 | packaged smoke：**2026-09-28 最小面已修**——release 打包后同 job 从 archive 解包运行（bsdtar 解 zip）；跨平台干净 runner 矩阵（§6）仍留 R0+ | 最小面已闭合 |
 | G4 | 无 SBOM；无签名/公证步骤（ADR-0007 与 roadmap 共通项） | 高 |
 | G5 | 包管理器零落地（Scoop bucket / Homebrew tap / deb 均无仓库无 manifest；自更新切片明确将其留作"计划中"） | 高（DoD 硬项） |
 | G6 | macOS x86_64 产物缺失（macos-13 runner 移除后未补；自更新 spec 的平台映射表列了 macos-x64，但 workflow 矩阵仍是 4 目标） | 中 |
@@ -172,11 +172,12 @@ publish 前独立 job：**下载 archive 产物本身**（非构建树），在�
 > 拿的是 2.39 基线产物。**
 
 - [ ] **R0 首发布打通（archive 质量清零）**：~~tag↔版本断言~~✅ +
-  `dist` preset + Windows 静态 triplet + Linux 基线切 22.04 +
-  `cmake --install` staging 打包 + packaged smoke 矩阵；打 `v0.1.1-rc1`
-  试跑全流程（alpha 序列已消耗至 0.1.1）。
-  验收：4 archives + SHA256SUMS + SBOM 挂 draft release，**packaged smoke
-  从 archive 解包**全绿，Windows zip 在无 vcpkg 环境解包即跑。
+  ~~Windows 静态 triplet~~✅（2026-09-28，x64-windows-static + dumpbin 门）
+  + ~~archive 解包冒烟~~✅（release 同 job 最小面）+ 剩余：`dist` preset、
+  Linux 基线切 22.04、`cmake --install` staging 打包、SBOM、跨平台干净
+  runner 冒烟矩阵；打 `v0.1.1-rc1` 试跑全流程（alpha 序列已消耗至 0.1.1）。
+  验收：4 archives + SHA256SUMS + SBOM 挂 draft release，smoke 全绿，
+  Windows zip 在无 vcpkg 环境解包即跑。
 - [ ] **R1 基线落档**：README/ARCHITECTURE §16 声明 glibc 2.35 与产物
   矩阵；GLIBC 符号审计进 smoke；install.sh 按基线提示老发行版。
 - [ ] **R2 Scoop**：bucket 仓库 + manifest 生成 + PR 流程；新机安装验收。

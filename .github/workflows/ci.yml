@@ -69,7 +69,10 @@ jobs:
           # macos-13（最后的 Intel 镜像）已从队列饥饿到永不调度：
           # 连续多次 run 排队满 24h 被 GitHub 取消，整条流水线因此恒红。
           # Intel 覆盖等真正需要时再上 osxcross 交叉编译。
-          - { os: windows-2022, arch: x64 }
+          # Windows 发行走静态 triplet（x64-windows-static：静态 CRT + 静态第三方
+          # 库）——单 exe 自包含、干净机器解包即用（NFR-001）。动态产物曾连发
+          # 5 个坏包（v0.1.1-alpha.1~5 的 zip 缺 vcpkg DLL，构建树 smoke 检测不到）。
+          - { os: windows-2022, arch: x64, triplet: x64-windows-static }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -82,10 +85,25 @@ jobs:
         uses: ./.github/actions/setup-vcpkg
 
       - name: Configure
-        run: cmake --preset ci
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.triplet }}" ]; then
+            cmake --preset ci -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          else
+            cmake --preset ci
+          fi
 
       - name: Build
         run: cmake --build --preset ci
+
+      - name: Assert Windows static linkage
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = dumpbin /dependents build/ci/astral.exe | Out-String
+          $bad = $out -split "`r?`n" | Select-String -Pattern 'libcurl|libssl|libcrypto|zlib|archive|lzma|xml2|ssh2|brotli'
+          if ($bad) { Write-Host $out; throw "dynamic third-party DLL imports found - Windows builds must be fully static" }
+          Write-Host "dependents clean (system DLLs only)"
 
       - name: Unit tests
         run: ctest --preset ci
