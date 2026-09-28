@@ -7,6 +7,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 chmod +x "$root/scripts/commitlint.sh" 2>/dev/null || true
 chmod +x "$root/scripts/git-hooks/commit-msg" 2>/dev/null || true
+chmod +x "$root/scripts/git-hooks/pre-commit" 2>/dev/null || true
 
 git -C "$root" config core.hooksPath scripts/git-hooks
 
