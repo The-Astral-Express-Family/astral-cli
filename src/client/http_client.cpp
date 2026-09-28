@@ -2,7 +2,10 @@
 
 #include <curl/curl.h>
 
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <system_error>
 
 #include "core/error.hpp"
 #include "core/version.hpp"
@@ -25,6 +28,14 @@ size_t appendToBody(char* data, size_t size, size_t count, void* userData) {
     auto* body = static_cast<std::string*>(userData);
     body->append(data, size * count);
     return size * count;
+}
+
+// Returning fewer bytes than delivered aborts the transfer (CURLE_WRITE_ERROR),
+// which keeps a failing disk surfacing as an ordinary transport error.
+size_t writeToFile(char* data, size_t size, size_t count, void* userData) {
+    auto* file = static_cast<std::ofstream*>(userData);
+    file->write(data, static_cast<std::streamsize>(size * count));
+    return file ? size * count : 0;
 }
 
 size_t collectHeader(char* data, size_t size, size_t count, void* userData) {
@@ -77,7 +88,9 @@ HttpClient::HttpClient(Options options) : options_(std::move(options)) {
 
 HttpClient::~HttpClient() = default;
 
-HttpResponse HttpClient::send(const HttpRequest& request) {
+void HttpClient::perform(const HttpRequest& request,
+                         size_t (*writeBody)(char*, size_t, size_t, void*), void* bodySink,
+                         HttpResponse& response) {
     if (request.url.find("://") == std::string::npos) {
         throw core::AstralError(core::Errc::NetworkError,
                                 "invalid URL (missing scheme): " + request.url);
@@ -88,7 +101,6 @@ HttpResponse HttpClient::send(const HttpRequest& request) {
         throw core::AstralError(core::Errc::Internal, "curl_easy_init failed");
     }
 
-    HttpResponse response;
     struct curl_slist* headerList = nullptr;
     auto cleanup = [&handle, &headerList] {
         if (headerList != nullptr) {
@@ -101,11 +113,17 @@ HttpResponse HttpClient::send(const HttpRequest& request) {
     for (const auto& [key, value] : request.headers) {
         headerList = curl_slist_append(headerList, (key + ": " + value).c_str());
     }
+    for (const auto& [key, value] : options_.headers) {
+        headerList = curl_slist_append(headerList, (key + ": " + value).c_str());
+    }
     if (request.bearerToken) {
         headerList = curl_slist_append(headerList,
                                        ("Authorization: Bearer " + *request.bearerToken).c_str());
     }
 
+    // NOTE: no CURLOPT_PROXY* is ever set here; libcurl must keep honoring the
+    // standard proxy environment variables (HTTP_PROXY/HTTPS_PROXY/NO_PROXY/
+    // ALL_PROXY and lowercase variants).
     curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
     curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 1L);
     curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
@@ -116,8 +134,12 @@ HttpResponse HttpClient::send(const HttpRequest& request) {
                      static_cast<long>(options_.requestTimeout.count()));
     curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, options_.verifyTls ? 1L : 0L);
     curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, options_.verifyTls ? 2L : 0L);
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, appendToBody);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+    if (options_.followRedirects) {
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
+    }
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeBody);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, bodySink);
     curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, collectHeader);
     curl_easy_setopt(handle, CURLOPT_HEADERDATA, &response.headers);
     if (!request.body.empty() || request.method == "POST" || request.method == "PUT" ||
@@ -139,6 +161,11 @@ HttpResponse HttpClient::send(const HttpRequest& request) {
 
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.status);
     cleanup();
+}
+
+HttpResponse HttpClient::send(const HttpRequest& request) {
+    HttpResponse response;
+    perform(request, appendToBody, &response.body, response);
     return response;
 }
 
@@ -159,6 +186,43 @@ HttpResponse HttpClient::postJson(const std::string& url, const std::string& jso
     request.bearerToken = std::move(bearer);
     request.headers.emplace_back("Content-Type", "application/json");
     return send(request);
+}
+
+HttpResponse HttpClient::getToFile(const std::string& url,
+                                   const std::filesystem::path& destination) {
+    HttpRequest request;
+    request.method = "GET";
+    request.url = url;
+
+    std::ofstream file(destination, std::ios::binary);
+    if (!file) {
+        throw core::AstralError(core::Errc::LocalWorkspaceError,
+                                "cannot open download destination: " + destination.string());
+    }
+
+    auto removePartialFile = [&destination] {
+        std::error_code ignored;
+        std::filesystem::remove(destination, ignored);
+    };
+
+    HttpResponse response;
+    try {
+        perform(request, writeToFile, &file, response);
+    } catch (...) {
+        file.close();
+        removePartialFile();
+        throw;
+    }
+
+    if (response.status >= 400) {
+        file.close();
+        removePartialFile();
+        throw core::AstralError(core::Errc::NetworkError,
+                                "HTTP " + std::to_string(response.status) +
+                                    " downloading " + url);
+    }
+
+    return response;
 }
 
 } // namespace astral::client
