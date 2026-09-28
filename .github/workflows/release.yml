@@ -86,10 +86,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="astral-${version}-${ASTRAL_TARGET}"
-          mkdir -p "dist/${name}"
-          cp build/ci/astral "dist/${name}/"
-          cp LICENSE README.md "dist/${name}/"
-          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          mkdir -p "staging/${name}"
+          cp build/ci/astral "staging/${name}/"
+          cp LICENSE README.md "staging/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C staging "${name}"
 
       - name: Package (windows)
         if: matrix.archive == 'zip'
@@ -97,10 +97,10 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $name = "astral-$version-$env:ASTRAL_TARGET"
-          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item build/ci/astral.exe "dist/$name/"
-          Copy-Item LICENSE, README.md "dist/$name/"
-          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          New-Item -ItemType Directory -Force "staging/$name" | Out-Null
+          Copy-Item build/ci/astral.exe "staging/$name/"
+          Copy-Item LICENSE, README.md "staging/$name/"
+          Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -132,7 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # scripts/install.sh and scripts/install.ps1 are provided by tasks 10/11.
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* scripts/install.sh scripts/install.ps1 \
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt scripts/install.sh scripts/install.ps1 \
             --title "astral ${GITHUB_REF_NAME}" \
             --generate-notes \
             --verify-tag
