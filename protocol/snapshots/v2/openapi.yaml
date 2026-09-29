@@ -84,7 +84,7 @@ paths:
   /auth/register:
     post:
       tags: [auth]
-      summary: 注册 Human（A5）：带 invite_code 走邀请兑换；不带则为 bootstrap（仅当服务器无 human）
+      summary: 注册 Human（A5/ADR-0009）：带 registration_code 走注册码兑换（仅注册，不入伙）；不带则为 bootstrap（仅当服务器无 human）
       security: []
       operationId: register
       requestBody:
@@ -98,11 +98,12 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 8, maxLength: 72, description: 需含字母与数字 }
                 display_name: { type: string }
-                invite_code:
+                registration_code:
                   type: string
                   description: >
-                    一次性邀请码（XXXXX-XXXXX-XXXXX-XXXXX，比对前归一化：去分隔符+大写）。
-                    兑换即建号 + 入伙 + 建立 web 会话（docs/registration.md §4）。
+                    一次性注册邀请码（XXXXX-XXXXX-XXXXX-XXXXX，比对前归一化：去分隔符+大写）。
+                    兑换即建号 + 建立 web 会话，不加入任何 workspace——入伙走
+                    POST /invitations/redeem（docs/registration.md §4，ADR-0009）。
       responses:
         "201":
           description: "已注册（Set-Cookie: astral_session；响应 = Me + session，与 login 同形状）"
@@ -111,7 +112,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
-        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（四种失效统一防探测）或 VALIDATION_FAILED
+        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（查无/已用/撤销/过期/工作区码，统一防探测）或 VALIDATION_FAILED
         "403": { $ref: "#/components/responses/Error" }   # bootstrap 分支：已有 human，注册关闭
         "409": { $ref: "#/components/responses/Error" }   # EMAIL_TAKEN（此时邀请不消耗）
 
@@ -1103,7 +1104,7 @@ paths:
       - { $ref: "#/components/parameters/WorkspaceId" }
     post:
       tags: [workspaces]
-      summary: 签发一次性邀请码（A5；需 human session + workspace:manage_members，agent credential 403）
+      summary: 签发一次性工作区邀请码（A5/ADR-0009；需 human session + workspace:manage_members，agent credential 403；码供已注册用户经 /invitations/redeem 入伙）
       operationId: createInvitation
       requestBody:
         required: true
@@ -1112,7 +1113,7 @@ paths:
             schema: { $ref: "#/components/schemas/InvitationCreate" }
       responses:
         "201":
-          description: 已签发；code 明文仅本次返回，invite_url 为拼好的注册链接
+          description: 已签发；code 明文仅本次返回，invite_url 为拼好的入伙链接（/join?ws=）
           content:
             application/json:
               schema: { $ref: "#/components/schemas/InvitationCreated" }
@@ -1136,6 +1137,32 @@ paths:
         "400": { $ref: "#/components/responses/Error" }   # status 过滤值非法
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /invitations/redeem:
+    post:
+      tags: [workspaces]
+      summary: 凭工作区邀请码入伙（ADR-0009：工作区码=权限授予，任何已存在 human 可兑；
+        本人重复兑已兑码幂等 200；已是成员 409 ALREADY_MEMBER 且码不消耗）
+      operationId: redeemInvitation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, description: 一次性工作区邀请码（比对前归一化：去分隔符+大写） }
+      responses:
+        "200":
+          description: 已入伙（含幂等重试；返回 workspace 与生效角色）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationRedeemed" }
+        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（查无/已用/撤销/过期/注册码，统一防探测）或 VALIDATION_FAILED
+        "403": { $ref: "#/components/responses/Error" }   # agent credential：入伙是人的行为
 
   /invitations/{invitation_id}/revoke:
     post:
@@ -1342,6 +1369,60 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
 
+  /admin/registration-invitations:
+    post:
+      tags: [admin]
+      summary: 签发注册邀请（platform:users:manage；唯一注册资格来源——兑换后为普通 user，不入任何 workspace）
+      operationId: createRegistrationInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegistrationInvitationCreate" }
+      responses:
+        "201":
+          description: 已签发（code 明文仅本次返回）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RegistrationInvitationCreated" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [admin]
+      summary: 注册邀请列表（platform:users:manage；id 降序游标分页；不回传 code）
+      operationId: listRegistrationInvitations
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [invited, redeemed, revoked]
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: 邀请分页列表
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RegistrationInvitationPage" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /admin/registration-invitations/{invitation_id}/revoke:
+    post:
+      tags: [admin]
+      summary: 撤销注册邀请（platform:users:manage；重复撤销幂等 204）
+      operationId: revokeRegistrationInvitation
+      parameters:
+        - { name: invitation_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      responses:
+        "204": { description: 已撤销（幂等） }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1423,7 +1504,7 @@ components:
     Id:
       type: string
       pattern: "^[a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/dvh/prs/msg/evt/cred/ses/dev/req/aud/apv/inv。
+      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/dvh/prs/msg/evt/cred/ses/dev/req/aud/apv/inv/reg（reg=注册邀请，00019；存量注册邀请行残留 inv）。
       examples: ["ws_0192ab34-56cd-7ef8-9a01-234567890abc"]
 
     IdOrNull:
@@ -1456,7 +1537,8 @@ components:
         - TASK_LEASE_EXPIRED
         - TAG_PROPOSAL_EXPIRED
         - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
-        - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期统一此码（防探测，400）
+        - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期/类型不符统一此码（防探测，400）
+        - ALREADY_MEMBER          # 兑码入伙时已是该 workspace 成员（409，ADR-0009）
         - EMAIL_TAKEN             # email 已被注册（409，仅邀请码验证通过后可达）
         - TAG_ALREADY_EXISTS
         - REVISION_CONFLICT
@@ -1699,7 +1781,7 @@ components:
             invite_url:
               type: string
               format: uri
-              description: "{WebBaseURL}/register?code=<code>；基址回退链 WebBaseURL→PublicURL→请求 Host"
+              description: "{WebBaseURL}/join?ws=<code>（面向已注册用户的入伙链接，ADR-0009）；基址回退链 WebBaseURL→PublicURL→请求 Host"
 
     InvitationPage:
       allOf:
@@ -1707,6 +1789,60 @@ components:
         - type: object
           properties:
             items: { type: array, items: { $ref: "#/components/schemas/Invitation" } }
+
+    InvitationRedeemed:
+      type: object
+      required: [workspace, role]
+      properties:
+        workspace: { $ref: "#/components/schemas/Workspace" }
+        role: { $ref: "#/components/schemas/InvitationRole" }
+      description: POST /invitations/redeem 的入伙结果（幂等重试同形状）
+
+    RegistrationInvitationCreate:
+      type: object
+      properties:
+        expires_in:
+          type: integer
+          minimum: 1
+          maximum: 2592000
+          default: 604800
+          description: 有效期（秒）；缺省 7 天，上限 30 天
+
+    RegistrationInvitation:
+      type: object
+      required: [id, status, created_by, created_at, expires_at]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        status:
+          type: string
+          enum: [invited, redeemed, revoked]
+          description: expired 为派生态（invited 且 now > expires_at），不落库
+        created_by: { $ref: "#/components/schemas/Id" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        redeemed_by: { $ref: "#/components/schemas/IdOrNull" }
+        redeemed_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+
+    RegistrationInvitationCreated:
+      allOf:
+        - $ref: "#/components/schemas/RegistrationInvitation"
+        - type: object
+          required: [code, invite_url]
+          properties:
+            code:
+              type: string
+              description: 注册邀请码明文（XXXXX-XXXXX-XXXXX-XXXXX，Crockford base32，100 bit 熵），仅签发响应返回一次
+            invite_url:
+              type: string
+              format: uri
+              description: "{WebBaseURL}/register?code=<code>（注册链接，ADR-0009）；基址回退链 WebBaseURL→PublicURL→请求 Host"
+
+    RegistrationInvitationPage:
+      allOf:
+        - $ref: "#/components/schemas/PageMeta"
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: "#/components/schemas/RegistrationInvitation" } }
 
     TaskStatus:
       type: string

@@ -49,7 +49,7 @@ std::vector<std::string> registerArgs() {
             "passw0rd1",
             "--display-name",
             "Alice",
-            "--invite-code",
+            "--registration-code",
             "ABCDE-FGHIJ-KLMNO-PQRST"};
 }
 
@@ -76,7 +76,7 @@ bool hasHeader(const astral::client::HttpRequest& request, const std::string& na
     return false;
 }
 
-TEST_CASE("register posts the anonymous invite body and chains device-flow login") {
+TEST_CASE("register posts the anonymous registration body and chains device-flow login") {
     ApiFixture fx;
     fx.fake().route("/auth/register", 201, kMe);
     routeDeviceFlowGrant(fx.fake());
@@ -102,7 +102,7 @@ TEST_CASE("register posts the anonymous invite body and chains device-flow login
     REQUIRE(body == json{{"email", "alice@example.com"},
                          {"password", "passw0rd1"},
                          {"display_name", "Alice"},
-                         {"invite_code", "ABCDE-FGHIJ-KLMNO-PQRST"}});
+                         {"registration_code", "ABCDE-FGHIJ-KLMNO-PQRST"}});
 
     // 登录半程的 token 对已落盘（凭证槽 = server URL）。
     auto store = astral::platform::makeDefaultCredentialStore();
@@ -149,7 +149,7 @@ TEST_CASE("register --no-login creates the account and stops there") {
     REQUIRE_FALSE(payload.contains("session"));
 }
 
-TEST_CASE("register --bootstrap omits invite_code from the body") {
+TEST_CASE("register --bootstrap omits registration_code from the body") {
     ApiFixture fx;
     fx.fake().route("/auth/register", 201, kMe);
 
@@ -162,28 +162,28 @@ TEST_CASE("register --bootstrap omits invite_code from the body") {
     const astral::client::HttpRequest& registerRequest = fx.fake().requests.back();
     const json body = json::parse(registerRequest.body);
     REQUIRE(body == json{{"email", "alice@example.com"}, {"password", "passw0rd1"}});
-    REQUIRE_FALSE(body.contains("invite_code"));
+    REQUIRE_FALSE(body.contains("registration_code"));
 }
 
-TEST_CASE("register without --invite-code or --bootstrap is a usage error") {
+TEST_CASE("register without --registration-code or --bootstrap is a usage error") {
     ApiFixture fx;
     fx.fake().route("/auth/register", 201, kMe);
 
     std::vector<std::string> args = registerArgs();
-    args.pop_back(); // 丢掉 invite code 值
-    args.pop_back(); // 丢掉 --invite-code
+    args.pop_back(); // 丢掉 registration code 值
+    args.pop_back(); // 丢掉 --registration-code
     const RunResult result = runApp(args);
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
-    REQUIRE(result.err.find("invite") != std::string::npos);
+    REQUIRE(result.err.find("registration code") != std::string::npos);
     // 用法错误在 discovery 之前拦下，不发出任何请求。
     REQUIRE(fx.fake().requests.empty());
 }
 
-TEST_CASE("register --invite-code together with --bootstrap is a usage error") {
+TEST_CASE("register --registration-code together with --bootstrap is a usage error") {
     ApiFixture fx;
-    const RunResult result = runApp({"astral", "register", "https://api.test", "--email",
-                                     "alice@example.com", "--password", "passw0rd1",
-                                     "--invite-code", "ABCDE-FGHIJ-KLMNO-PQRST", "--bootstrap"});
+    const RunResult result = runApp(
+        {"astral", "register", "https://api.test", "--email", "alice@example.com", "--password",
+         "passw0rd1", "--registration-code", "ABCDE-FGHIJ-KLMNO-PQRST", "--bootstrap"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
     REQUIRE(fx.fake().requests.empty());
 }
@@ -195,7 +195,7 @@ TEST_CASE("register INVITE_INVALID is exit 1 with the server detail in the messa
     const RunResult result = runApp(registerArgs());
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::GenericFailure));
     REQUIRE(result.err.find("[REGISTRATION_REJECTED]") != std::string::npos);
-    REQUIRE(result.err.find("invite code rejected") != std::string::npos);
+    REQUIRE(result.err.find("registration code rejected") != std::string::npos);
     REQUIRE(result.err.find("invite code is invalid") != std::string::npos);
 }
 
@@ -210,12 +210,12 @@ TEST_CASE("register rejections surface the protocol code in --json") {
 
     const json payload = json::parse(result.out);
     REQUIRE(payload["error"]["code"] == "INVITE_INVALID");
-    REQUIRE(payload["error"]["message"].get<std::string>().find("invite code rejected") !=
+    REQUIRE(payload["error"]["message"].get<std::string>().find("registration code rejected") !=
             std::string::npos);
     REQUIRE(payload["error"]["request_id"] == "req_1");
 }
 
-TEST_CASE("register EMAIL_TAKEN is exit 1 and notes the invite was not consumed") {
+TEST_CASE("register EMAIL_TAKEN is exit 1 and notes the code was not consumed") {
     ApiFixture fx;
     fx.fake().route("/auth/register", 409, errorBody("EMAIL_TAKEN", "email in use"));
 
@@ -225,7 +225,7 @@ TEST_CASE("register EMAIL_TAKEN is exit 1 and notes the invite was not consumed"
     REQUIRE(result.err.find("not consumed") != std::string::npos);
 }
 
-TEST_CASE("register bootstrap branch on a populated server is exit 1 with invite hint") {
+TEST_CASE("register bootstrap branch on a populated server is exit 1 with code hint") {
     ApiFixture fx;
     fx.fake().route(
         "/auth/register", 403,
@@ -235,7 +235,7 @@ TEST_CASE("register bootstrap branch on a populated server is exit 1 with invite
         runApp({"astral", "register", "https://api.test", "--email", "alice@example.com",
                 "--password", "passw0rd1", "--bootstrap"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::GenericFailure));
-    REQUIRE(result.err.find("an invite code is required") != std::string::npos);
+    REQUIRE(result.err.find("a registration code is required") != std::string::npos);
     REQUIRE(result.err.find("registration closed") != std::string::npos);
 }
 

@@ -1,8 +1,8 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "3772f7d",
-  "published_at": "2026-09-26",
+  "source_commit": "e0b2b7b",
+  "published_at": "2026-09-29",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.3 刷新自 3772f7d（round 41 增量）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.4 刷新自 e0b2b7b（ADR-0009 邀请双轨分离：register 字段更名 registration_code、新增 /invitations/redeem 与 ALREADY_MEMBER、/admin/registration-invitations 改名、工作区邀请链接改指 /join?ws=）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -35,7 +35,7 @@
     "memory_prefix": "memory/ 前缀是 documents 端点内的保留子空间（M1）：该前缀读写要求 memory:read / memory:write scope（其余路径 document:*）；组织记忆 = 保留 workspace org-memory 下的 memory/** 文档；无独立 memory API",
     "pagination_envelope": "全部列表端点统一 {items,next_cursor} 信封（G1）：manifest（limit 缺省 200 上限 1000，游标=末行 path）/conflicts（共享 Limit 200）/workspace audit/admin audit/presence（next_cursor 恒 null，成员规模有界）",
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
-    "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
+    "invite_register": "POST /auth/register {registration_code, email, password, display_name}（注册码只建号不入伙，ADR-0009；CLI register 命令 = P3 属本仓，flag --registration-code）；工作区码不能注册——错轨与查无/失效统一 INVITE_INVALID（防探测），EMAIL_TAKEN 仅在注册码验证通过后可达；已登录 human 兑工作区码入伙走 POST /invitations/redeem（幂等重试 200 / ALREADY_MEMBER 409）；安全事件 security.invite.created/revoked/redeemed",
     "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
     "capabilities": "GET /meta/capabilities features 至少含 task_lease 与 document_sync；客户端按 feature 判断能力，不猜测 server 实现版本",
     "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
