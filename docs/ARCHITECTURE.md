@@ -482,6 +482,14 @@ tag/status/assignee 平权（至少一个条件）。
 移回根层。`add`/`add-tree` 均携带确定性 Idempotency-Key（内容派生，
 与 msg/document 同纪律）。
 
+依赖边（2026-09-30，协议快照 v2.5 / 服务端 task_dependencies）：
+`todo dep add <task_id> <on_task_id>` 建立「前者依赖后者」（缺省 blocks
+硬阻塞，`--relates` 对称关联）；`todo dep remove` 删边（`?kind=` 缺省
+blocks，幂等）；`todo dep list <task_id>` 双向列边。`todo show` 渲染
+blocked_by/blocks/related 视图字段；`todo list`/`todo search` 支持
+`--blocked`（存在未完成依赖）与 `--blocked-by <id>` 过滤。依赖目前不拦截
+claim/done（服务端裁决：只表达/展示/过滤）。
+
 `claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
 GET 任务当前 revision 再提交（读改写窗口由服务端 409
 `REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过

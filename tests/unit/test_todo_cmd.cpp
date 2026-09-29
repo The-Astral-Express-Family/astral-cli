@@ -862,3 +862,93 @@ TEST_CASE("todo add carries a deterministic idempotency key") {
     }
     REQUIRE(key.rfind("todo-", 0) == 0);
 }
+
+// ---- v2.5 task dependencies (todo dep / show / --blocked) -----------------
+
+TEST_CASE("todo dep add posts a blocks edge by default and relates with the flag") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 201,
+                    json{{"from_task_id", "task_1"}, {"to_task_id", "task_2"}, {"kind", "blocks"}});
+
+    const RunResult result = runApp({"astral", "todo", "dep", "add", "task_1", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Blocked task_1 by task_2") != std::string::npos);
+
+    const client::HttpRequest& put = fx.fake().requests.back();
+    REQUIRE(put.method == "PUT");
+    REQUIRE(put.url.find("/tasks/task_1/dependencies/task_2") != std::string::npos);
+    REQUIRE(json::parse(put.body).at("kind") == "blocks");
+
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 201, json{{"kind", "relates"}});
+    const RunResult rel = runApp({"astral", "todo", "dep", "add", "task_1", "task_2", "--relates"});
+    REQUIRE(rel.exitCode == 0);
+    REQUIRE(rel.out.find("Related task_1 <-> task_2") != std::string::npos);
+    REQUIRE(json::parse(fx.fake().requests.back().body).at("kind") == "relates");
+}
+
+TEST_CASE("todo dep remove deletes with the kind query and confirms") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 204, json::object());
+
+    const RunResult result = runApp({"astral", "todo", "dep", "remove", "task_1", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Removed blocks edge task_1 -> task_2") != std::string::npos);
+
+    const client::HttpRequest& del = fx.fake().requests.back();
+    REQUIRE(del.method == "DELETE");
+    REQUIRE(del.url.find("kind=blocks") != std::string::npos);
+}
+
+TEST_CASE("todo dep list prints edges both ways and supports --json") {
+    ApiFixture fx;
+    const json list = json{{"items", json::array({
+                                         json{{"from_task_id", "task_1"},
+                                              {"to_task_id", "task_2"},
+                                              {"kind", "blocks"},
+                                              {"created_at", "2026-09-30T00:00:00Z"}},
+                                         json{{"from_task_id", "task_3"},
+                                              {"to_task_id", "task_1"},
+                                              {"kind", "relates"},
+                                              {"created_at", "2026-09-30T00:00:00Z"}},
+                                     })}};
+    fx.fake().route("/tasks/task_1/dependencies", 200, list);
+
+    const RunResult result = runApp({"astral", "todo", "dep", "list", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("task_1 -> task_2  (blocks)") != std::string::npos);
+    REQUIRE(result.out.find("task_3 -> task_1  (relates)") != std::string::npos);
+
+    fx.fake().route("/tasks/task_1/dependencies", 200, list);
+    const RunResult asJson = runApp({"astral", "todo", "dep", "list", "task_1", "--json"});
+    REQUIRE(asJson.exitCode == 0);
+    REQUIRE(json::parse(asJson.out).at("items").size() == 2);
+}
+
+TEST_CASE("todo show renders dependency view fields") {
+    ApiFixture fx;
+    json detailed = kTaskOne;
+    detailed["blocked_by"] = json::array({"task_9"});
+    detailed["blocks"] = json::array();
+    detailed["related"] = json::array({"task_7", "task_8"});
+    fx.fake().route("/tasks/task_1", 200, detailed);
+
+    const RunResult result = runApp({"astral", "todo", "show", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("blocked_by:") != std::string::npos);
+    REQUIRE(result.out.find("task_9") != std::string::npos);
+    REQUIRE(result.out.find("related:") != std::string::npos);
+    REQUIRE(result.out.find("task_7, task_8") != std::string::npos);
+}
+
+TEST_CASE("todo list forwards blocked filters as query parameters") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/children", 200, kTaskPage);
+
+    const RunResult result =
+        runApp({"astral", "todo", "list", "--blocked", "--blocked-by", "task_2", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& req = fx.fake().requests.back();
+    REQUIRE(req.url.find("blocked=true") != std::string::npos);
+    REQUIRE(req.url.find("blocked_by=task_2") != std::string::npos);
+}

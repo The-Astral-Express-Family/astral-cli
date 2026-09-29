@@ -1,7 +1,7 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "e4560a6",
+  "source_commit": "ab198a0",
   "published_at": "2026-09-30",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.4 刷新自 e4560a6（任务批量管理 + 平台邀请增量）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零）。本快照 v2.5 刷新自 ab198a0（任务依赖 task_dependencies 增量；info.version 2.2.0，protocol_version 仍 2——并行的兄弟排序/租约重构变更未合入，合入后需再刷）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -37,11 +37,12 @@
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
     "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
     "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
-    "capabilities": "GET /meta/capabilities features 至少含 task_lease、document_sync 与 task_batch；客户端按 feature 判断能力，不猜测 server 实现版本",
+    "capabilities": "GET /meta/capabilities features 至少含 task_lease、document_sync、task_batch 与 task_dependencies；客户端按 feature 判断能力，不猜测 server 实现版本",
     "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
     "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）",
     "task_batch": "任务批量管理（协议 2.1，task_batch）：POST /workspaces/{id}/task-trees 与 POST /tasks/{id}/task-trees（嵌套树批量创建，整批单事务全有或全无；≤50 棵根树、总节点 ≤200、深度 ≤8；响应 items 镜像请求树形，task 内含服务端 id）；POST /workspaces/{id}/tasks/move（批量换父：parent_id=null 回根层；逐项必带 expected_revision，409 details 带 task_id+current_revision；批内互移统一环检测；不支持跨 ws；子树恒跟随）；POST /workspaces/{id}/tasks/batch-update（同值批量改 status/priority/assignee，set 至少一项，assignee_actor_id=null 清空；批量取消= T1 软删语义）；三端点均整批单事务全有或全无，重试=整批重放；事件逐任务 emit 既有词表；audit 每批一条（task.batch_create/batch_move/batch_update）；建议整批携带确定性 Idempotency-Key",
-    "admin_invitations": "平台级注册邀请（2026-09-28）：POST /admin/invitations（签发，code 明文仅一次）/GET /admin/invitations（id 降序游标分页，不回传 code）/POST /admin/invitations/{id}/revoke（幂等 204）；授权复用 platform:users:manage；兑换走既有 POST /auth/register（invite_code 命中平台邀请则账号不入任何 workspace）"
+    "admin_invitations": "平台级注册邀请（2026-09-28）：POST /admin/invitations（签发，code 明文仅一次）/GET /admin/invitations（id 降序游标分页，不回传 code）/POST /admin/invitations/{id}/revoke（幂等 204）；授权复用 platform:users:manage；兑换走既有 POST /auth/register（invite_code 命中平台邀请则账号不入任何 workspace）",
+    "task_dependencies": "任务依赖边（协议 2.2，task_dependencies）：方向 from=依赖方（等待者）to=被依赖方（blocker）；kind=blocks 硬阻塞（PUT 时沿依赖链多分支防环）/relates 对称关联（不参与环）；端点 GET /tasks/{id}/dependencies（双向边全量，每方向上限 50）、PUT/DELETE /tasks/{id}/dependencies/{dep_id}（PUT 幂等：同边已存在 200 不 bump；DELETE 幂等 204，?kind= 缺省 blocks）；Task 恒填充 blocked_by/blocks/related（id 数组）；children/task-search 增 blocked=true（存在未 done 依赖，cancelled 不算完成）与 blocked_by=<id> 过滤；边写删两端各 bump revision + task.updated（data.dep_change）+ audit task.dependency.add/remove；依赖不拦截 claim/done"
   },
   "breaking_changes": [
     "protocol_version 1 -> 2（旧 CLI 被服务端干净拒绝，须同步升级）",
@@ -122,6 +123,18 @@
         "capabilities features += task_batch；Idempotency-Key 由 summary 散文正式化为 header 参数（挂 tasks 六个写端点）",
         "一并携带 8c25bd0（2026-09-28 平台级注册邀请三端点 + admin_invitations 语义，上一轮快照未跟进项）",
         "protocol_version 与 min_cli_protocol_version 维持 2，纯增量无版本号变化；error.schema.json / event.schema.json / well-known.json 无变化（已 diff 验证）"
+      ]
+    },
+    {
+      "date": "2026-09-30",
+      "label": "v2.5 快照刷新（任务依赖）",
+      "from_commit": "e4560a6",
+      "to_commit": "ab198a0",
+      "changes": [
+        "任务依赖边（modulator PR #9，协议 info.version 2.2.0）：新增 GET/PUT/DELETE /tasks/{id}/dependencies(/{dependency_task_id})；schema +DependencyEdge/DependencyList；Task required 增 blocked_by/blocks/related",
+        "children/task-search 增 blocked/blocked_by 过滤参数（TaskBlockedFilter/TaskBlockedByFilter）",
+        "capabilities features += task_dependencies",
+        "protocol_version 维持 2；error/event schema 与 well-known 无变化（已 diff 验证）；并行的 position/租约重构变更未入本快照"
       ]
     }
   ]

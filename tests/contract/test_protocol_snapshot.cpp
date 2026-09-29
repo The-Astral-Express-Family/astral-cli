@@ -113,6 +113,27 @@ TEST_CASE("task batch endpoints are pinned in the frozen snapshot (v2.4)") {
     }
 }
 
+TEST_CASE("task dependency endpoints are pinned in the frozen snapshot (v2.5)") {
+    const std::string openapi = snapshotFile("openapi.yaml");
+    for (const char* const needle : {
+             "/tasks/{task_id}/dependencies:",
+             "/tasks/{task_id}/dependencies/{dependency_task_id}:",
+             "listTaskDependencies",
+             "addTaskDependency",
+             "removeTaskDependency",
+             // CLI 消费所依赖的 schema 名与视图字段（show 渲染与 list 过滤）。
+             "DependencyEdge:",
+             "DependencyList:",
+             "blocked_by:",
+             "TaskBlockedFilter:",
+             "TaskBlockedByFilter:",
+             "task_dependencies", // capabilities feature
+         }) {
+        INFO("needle: " << needle);
+        REQUIRE(openapi.find(needle) != std::string::npos);
+    }
+}
+
 TEST_CASE("error enum covers the codes this CLI branches on") {
     const auto schema = snapshotJson("error.schema.json");
     const auto codes = schema.at("$defs").at("ErrorCode").at("enum");

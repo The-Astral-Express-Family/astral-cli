@@ -12,7 +12,7 @@
 openapi: 3.1.0
 info:
   title: Astral Modulator Public API
-  version: 2.1.0
+  version: 2.2.0
   license:
     name: MIT
     identifier: MIT
@@ -29,6 +29,14 @@ info:
     投递）、批量移动（POST /workspaces/{id}/tasks/move）、批量同值更新
     （POST /workspaces/{id}/tasks/batch-update）。三个批量端点均为整批单事务
     全有或全无语义；删除仍不做（T1：取消走 status=cancelled）。
+
+    2.2（任务依赖，TODO.md §9 2026-09-30）：capabilities features 增
+    `task_dependencies`——任务依赖边（blocks / relates 两种语义），Task 对象
+    恒填充 blocked_by / blocks / related 视图字段；管理端点
+    GET/PUT/DELETE /tasks/{id}/dependencies；children 与 task-search 支持
+    blocked / blocked_by 过滤。依赖目前只做表达/展示/过滤，不拦截
+    claim/done。注：与并行的兄弟排序变更同轮开发，info.version 以先合入者
+    为 2.2，后合入者顺延。
 
     已裁决的文档分歧（详见 TODO.md「文档分歧裁决」D1-D4）：
     - Device flow 采用 `/auth/device/authorizations*` 路径。
@@ -540,6 +548,8 @@ paths:
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -579,6 +589,8 @@ paths:
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -655,6 +667,8 @@ paths:
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -747,6 +761,74 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
         "409": { $ref: "#/components/responses/Error" }   # REVISION_CONFLICT，details 带当前 revision
+
+  /tasks/{task_id}/dependencies:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+    get:
+      tags: [tasks]
+      summary: 任务依赖边列表（双向：作为依赖方与作为 blocker 的全部边）
+      operationId: listTaskDependencies
+      responses:
+        "200":
+          description: 依赖边全量（边数有界，单任务每方向上限 50，不分页）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyList" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /tasks/{task_id}/dependencies/{dependency_task_id}:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+      - name: dependency_task_id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Id" }
+        description: 被依赖方（blocker）；必须与 task_id 同 workspace
+    put:
+      tags: [tasks]
+      summary: |
+        增加依赖边（task_id 依赖 dependency_task_id；body.kind 缺省 blocks）。
+        blocks 边写入时沿依赖链防环；同边已存在则幂等 200 不 bump。
+        边变更两端任务各 revision+1 并发 task.updated（data.dep_change）。
+      operationId: addTaskDependency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum: [blocks, relates]
+                  default: blocks
+                  description: blocks = 硬阻塞（防环校验）；relates = 对称关联
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyEdge" }
+        "200":
+          description: 边已存在（幂等，不 bump）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyEdge" }
+        "400": { $ref: "#/components/responses/Error" }   # 自依赖/环/跨 ws/kind 非法/超上限
+        "404": { $ref: "#/components/responses/Error" }   # 任务不存在（含跨 ws）
+    delete:
+      tags: [tasks]
+      summary: 删除依赖边（?kind= 缺省 blocks；边不存在幂等 204）
+      operationId: removeTaskDependency
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string, enum: [blocks, relates], default: blocks }
+      responses:
+        "204": { description: 已删除（或边本不存在） }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /tasks/{task_id}/claim:
     post:
@@ -1548,6 +1630,18 @@ components:
       name: assignee
       in: query
       schema: { type: string }
+    TaskBlockedFilter:
+      name: blocked
+      in: query
+      schema: { type: boolean, default: false }
+      description: |
+        仅返回存在未完成 blocks 依赖的任务（2.2）：依赖对端 status != done
+        即视为阻塞中（cancelled 不算完成，T1 下它是可复活状态）。
+    TaskBlockedByFilter:
+      name: blocked_by
+      in: query
+      schema: { type: string }
+      description: 仅返回被指定任务阻塞（存在 blocks 边指向该任务）的任务（2.2）。
     TaskRegexFilter:
       name: regex
       in: query
@@ -1962,7 +2056,8 @@ components:
     Task:
       type: object
       required: [id, workspace_id, title, description, status, priority, parent_id,
-        assignee_actor_id, revision, tags, children_count, created_at, updated_at]
+        assignee_actor_id, revision, tags, children_count, blocked_by, blocks,
+        related, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/Id" }
         workspace_id: { $ref: "#/components/schemas/Id" }
@@ -1981,9 +2076,41 @@ components:
           type: integer
           format: int64
           description: 直接子任务数（UI 展开徽标；恒填充）
+        blocked_by:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 本任务依赖（等待）的任务 id 列表（2.2；blocks 边出向；恒填充）
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 依赖本任务（被本任务阻塞）的任务 id 列表（2.2；blocks 边入向；恒填充）
+        related:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 与本任务关联（relates 边）的任务 id 列表（2.2；恒填充）
         lease: { $ref: "#/components/schemas/LeaseOrNull" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    DependencyEdge:
+      type: object
+      required: [from_task_id, to_task_id, kind, created_at]
+      properties:
+        from_task_id: { $ref: "#/components/schemas/Id" }
+        to_task_id: { $ref: "#/components/schemas/Id" }
+        kind:
+          type: string
+          enum: [blocks, relates]
+          description: from 依赖 to（blocks = to 完成前 from 处于阻塞语义）
+        created_at: { type: string, format: date-time }
+
+    DependencyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyEdge" }
 
     TaskTreeNode:
       type: object

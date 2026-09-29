@@ -64,10 +64,12 @@ void printTreeCreated(std::ostream& out, const json& nodes, int depth) {
 }
 
 // Task list/search read flags: shared paging (--limit/--all) + the
-// task-specific status filter.
+// task-specific status filter + dependency filters (protocol 2.2).
 struct TaskPageFlags {
     PageFlags paging;
     std::string status;
+    bool blocked = false;
+    std::string blockedBy;
 };
 
 void addPageFlags(CLI::App& app, TaskPageFlags& flags) {
@@ -75,6 +77,10 @@ void addPageFlags(CLI::App& app, TaskPageFlags& flags) {
     app.add_option("--status", flags.status, "Filter by task status")
         ->check(CLI::IsMember(
             std::vector<std::string>{std::begin(kTaskStatuses), std::end(kTaskStatuses)}));
+    app.add_flag("--blocked", flags.blocked,
+                 "Only tasks with an unfinished blocking dependency (protocol 2.2)");
+    app.add_option("--blocked-by", flags.blockedBy,
+                   "Only tasks blocked by this task id (protocol 2.2)");
 }
 
 std::string pageQuery(const TaskPageFlags& flags) {
@@ -82,8 +88,26 @@ std::string pageQuery(const TaskPageFlags& flags) {
     if (!flags.status.empty()) {
         appendParam(query, "status", flags.status);
     }
+    if (flags.blocked) {
+        appendParam(query, "blocked", "true");
+    }
+    appendParam(query, "blocked_by", flags.blockedBy);
     addPageParams(query, flags.paging);
     return query;
+}
+
+// joinIds 渲染 Task 视图里的 id 数组字段（blocked_by/blocks/related）。
+std::string joinIds(const json& task, const char* field) {
+    std::string out;
+    if (auto array = task.find(field); array != task.end() && array->is_array()) {
+        for (const auto& id : *array) {
+            if (!out.empty()) {
+                out += ", ";
+            }
+            out += id.get<std::string>();
+        }
+    }
+    return out.empty() ? "-" : out;
 }
 
 void printTaskTable(std::ostream& out, const json& items, bool withScore) {
@@ -137,6 +161,9 @@ void printTaskDetail(std::ostream& out, const Painter& paint, const json& task) 
     line("priority", scalarOr(task, "priority", "normal"));
     line("assignee", scalarOr(task, "assignee_actor_id", "-"));
     line("parent", scalarOr(task, "parent_id", "-"));
+    line("blocked_by", joinIds(task, "blocked_by"));
+    line("blocks", joinIds(task, "blocks"));
+    line("related", joinIds(task, "related"));
     line("revision", scalarOr(task, "revision"));
     if (auto lease = task.find("lease"); lease != task.end() && lease->is_object()) {
         line("lease",
@@ -301,6 +328,23 @@ public:
         CLI::App* release = lease->add_subcommand("release", "Release a lease you hold");
         release->add_option("task_id", taskId_, "Task id")->required();
 
+        // 协议 2.2 task_dependencies：依赖边管理。方向 = <task_id> 依赖
+        // <on_task_id>（blocks 缺省，--relates 对称关联）。
+        CLI::App* dep = app.add_subcommand("dep", "Manage task dependencies (blocks / relates)");
+        dep->require_subcommand(1);
+        CLI::App* depAdd = dep->add_subcommand("add", "Make <task_id> depend on <on_task_id>");
+        depAdd->add_option("task_id", taskId_, "Dependent task id")->required();
+        depAdd->add_option("on_task_id", depPeer_, "Task it depends on (the blocker)")->required();
+        depAdd->add_flag("--relates", depRelates_,
+                         "Record a symmetric relation instead of a block");
+        CLI::App* depRemove = dep->add_subcommand("remove", "Remove the dependency edge");
+        depRemove->add_option("task_id", taskId_, "Dependent task id")->required();
+        depRemove->add_option("on_task_id", depPeer_, "Task it depended on")->required();
+        depRemove->add_flag("--relates", depRelates_, "Remove the relates edge instead of blocks");
+        CLI::App* depList =
+            dep->add_subcommand("list", "List dependency edges of a task (both directions)");
+        depList->add_option("task_id", taskId_, "Task id")->required();
+
         // v2 tag 挂载/摘除：幂等语义服务端保证（D11），<tag> 为词典名或 tag_ id。
         CLI::App* tag = app.add_subcommand("tag", "Attach or detach workspace tags on a task");
         tag->require_subcommand(1);
@@ -333,6 +377,10 @@ public:
         leaseSub_ = lease;
         leaseRenewSub_ = renew;
         leaseReleaseSub_ = release;
+        depSub_ = dep;
+        depAddSub_ = depAdd;
+        depRemoveSub_ = depRemove;
+        depListSub_ = depList;
         tagSub_ = tag;
         tagAttachSub_ = attach;
         tagDetachSub_ = detach;
@@ -374,6 +422,18 @@ public:
                 return runLeaseRelease(context);
             }
             throw core::AstralError(core::Errc::Usage, "no todo lease subcommand selected");
+        }
+        if (node_->got_subcommand(depSub_)) {
+            if (depSub_->got_subcommand(depAddSub_)) {
+                return runDepAdd(context);
+            }
+            if (depSub_->got_subcommand(depRemoveSub_)) {
+                return runDepRemove(context);
+            }
+            if (depSub_->got_subcommand(depListSub_)) {
+                return runDepList(context);
+            }
+            throw core::AstralError(core::Errc::Usage, "no todo dep subcommand selected");
         }
         if (node_->got_subcommand(tagSub_)) {
             if (tagSub_->got_subcommand(tagAttachSub_)) {
@@ -739,6 +799,67 @@ private:
         return 0;
     }
 
+    // runDepAdd：PUT /tasks/{a}/dependencies/{b}（body.kind 缺省 blocks，
+    // --relates 显式 relates）。服务端幂等：已存在同边 200，新建 201。
+    int runDepAdd(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        json body{{"kind", depRelates_ ? "relates" : "blocks"}};
+        const json edge = auth::sendJson(
+            api, "PUT", "/tasks/" + taskId_ + "/dependencies/" + depPeer_, body, "dependency add");
+
+        if (context.json) {
+            output::printJson(context.out, edge);
+            return 0;
+        }
+        if (depRelates_) {
+            context.out << "Related " << taskId_ << " <-> " << depPeer_ << '\n';
+        } else {
+            context.out << "Blocked " << taskId_ << " by " << depPeer_ << '\n';
+        }
+        return 0;
+    }
+
+    // runDepRemove：DELETE /tasks/{a}/dependencies/{b}?kind=（204 幂等）。
+    int runDepRemove(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        const std::string kind = depRelates_ ? "relates" : "blocks";
+        auth::sendNoBody(api, "DELETE",
+                         "/tasks/" + taskId_ + "/dependencies/" + depPeer_ + "?kind=" + kind,
+                         "dependency remove");
+
+        if (context.json) {
+            output::printJson(context.out, json{{"removed", true},
+                                                {"task_id", taskId_},
+                                                {"on_task_id", depPeer_},
+                                                {"kind", kind}});
+            return 0;
+        }
+        context.out << "Removed " << kind << " edge " << taskId_ << " -> " << depPeer_ << '\n';
+        return 0;
+    }
+
+    // runDepList：GET /tasks/{id}/dependencies（双向边全量）。
+    int runDepList(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        const json result =
+            auth::getJson(api, "/tasks/" + taskId_ + "/dependencies", "dependency list");
+
+        if (context.json) {
+            output::printJson(context.out, result); // DependencyList verbatim
+            return 0;
+        }
+        const json& items = result.at("items");
+        if (items.empty()) {
+            context.out << "No dependencies.\n";
+            return 0;
+        }
+        for (const auto& edge : items) {
+            context.out << scalarOr(edge, "from_task_id") << " -> " << scalarOr(edge, "to_task_id")
+                        << "  (" << scalarOr(edge, "kind") << ")\n";
+        }
+        return 0;
+    }
+
     int runTagAttach(const CommandContext& context) {
         // One session per run: discovery exactly once; unresolvable targets get the
         // D14 default-workspace hint from openWorkspace.
@@ -791,6 +912,10 @@ private:
     CLI::App* leaseSub_ = nullptr;
     CLI::App* leaseRenewSub_ = nullptr;
     CLI::App* leaseReleaseSub_ = nullptr;
+    CLI::App* depSub_ = nullptr;
+    CLI::App* depAddSub_ = nullptr;
+    CLI::App* depRemoveSub_ = nullptr;
+    CLI::App* depListSub_ = nullptr;
     CLI::App* tagSub_ = nullptr;
     CLI::App* tagAttachSub_ = nullptr;
     CLI::App* tagDetachSub_ = nullptr;
@@ -814,6 +939,8 @@ private:
     std::string status_;
     std::optional<std::string> assigneeUpdate_;
     std::string tagArg_;
+    std::string depPeer_;
+    bool depRelates_ = false;
 };
 
 } // namespace
