@@ -242,7 +242,8 @@ public:
         CLI::App* show = app.add_subcommand("show", "Show one task (includes tags)");
         show->add_option("task_id", taskId_, "Task id")->required();
 
-        CLI::App* claim = app.add_subcommand("claim", "Atomically claim a task (held until release/done)");
+        CLI::App* claim =
+            app.add_subcommand("claim", "Atomically claim a task (held until release/done)");
         claim->add_option("task_id", taskId_, "Task id")->required();
         claim->add_option("--revision", revision_,
                           "Expected revision (default: read the task's current revision)");
