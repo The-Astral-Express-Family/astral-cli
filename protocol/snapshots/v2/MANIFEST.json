@@ -1,7 +1,7 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "e4560a6",
+  "source_commit": "cfa89f7",
   "published_at": "2026-09-30",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.4 刷新自 e4560a6（任务批量管理 + 平台邀请增量）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.5 刷新自 cfa89f7（任务租约时间维度拆除，breaking，CLI 同轮跟进）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -21,7 +21,7 @@
     "token_refresh": "POST /auth/token/refresh {refresh_token}，rotating；重放 -> 401 TOKEN_REVOKED 且整族撤销（CLI 必须重新 login）",
     "astral_token": "agent credential 明文 astral_<base64url>，作 Bearer 使用",
     "workspace_resolve": "GET /workspaces?name=<exact-or-slug>；空 items = 不存在或不可见",
-    "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
+    "claim": "POST /tasks/{id}/claim {expected_revision}（协议 2.2 无 lease_seconds）：认领持有至 release/任务完成，无时间自动过期；他人持有 409 TASK_ALREADY_CLAIMED，revision 漂移 409 REVISION_CONFLICT；释放 DELETE /tasks/{id}/claim（claimant 本人，或 task:override 强制释放，未认领幂等 204）；Task 响应无 lease 字段（所有权看 assignee_actor_id）",
     "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）；非成员 404（不泄露存在性）/缺 workspace:read 403",
     "idempotency": "Idempotency-Key：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx（响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束；同键并发在进程内互斥（R8，单实例 MVP）；tasks 六个写端点已在 openapi 正式声明 Idempotency-Key header 参数（2.1）",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 2 于全部 /api/v1 响应",
@@ -37,7 +37,7 @@
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
     "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
     "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
-    "capabilities": "GET /meta/capabilities features 至少含 task_lease、document_sync 与 task_batch；客户端按 feature 判断能力，不猜测 server 实现版本",
+    "capabilities": "GET /meta/capabilities features 至少含 task_claim、document_sync 与 task_batch；客户端按 feature 判断能力，不猜测 server 实现版本",
     "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
     "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）",
     "task_batch": "任务批量管理（协议 2.1，task_batch）：POST /workspaces/{id}/task-trees 与 POST /tasks/{id}/task-trees（嵌套树批量创建，整批单事务全有或全无；≤50 棵根树、总节点 ≤200、深度 ≤8；响应 items 镜像请求树形，task 内含服务端 id）；POST /workspaces/{id}/tasks/move（批量换父：parent_id=null 回根层；逐项必带 expected_revision，409 details 带 task_id+current_revision；批内互移统一环检测；不支持跨 ws；子树恒跟随）；POST /workspaces/{id}/tasks/batch-update（同值批量改 status/priority/assignee，set 至少一项，assignee_actor_id=null 清空；批量取消= T1 软删语义）；三端点均整批单事务全有或全无，重试=整批重放；事件逐任务 emit 既有词表；audit 每批一条（task.batch_create/batch_move/batch_update）；建议整批携带确定性 Idempotency-Key",
@@ -110,6 +110,20 @@
         "f5b1e32（tag confirm 响应补 workspace_id）是实装补齐——openapi Tag schema 本就 required 该字段，契约无变化；error.schema.json / event.schema.json / well-known.json 逐字不变（已 diff 验证）",
         "保留策略为服务端运维项不入契约：TTL 30d + 每文档 50 版（ASTRAL_DOC_HISTORY_*）",
         "CLI 消费同轮落地（astral-cli 5c32909：document history / get --revision / push --force 盲推门）；protocol_version 与 min_cli_protocol_version 维持 2，纯增量无版本号变化"
+      ]
+    },
+    {
+      "date": "2026-09-30",
+      "label": "v2.5 快照刷新（任务租约时间维度拆除，breaking）",
+      "from_commit": "e4560a6",
+      "to_commit": "cfa89f7",
+      "changes": [
+        "移除 POST /tasks/{id}/lease/renew 与 DELETE /tasks/{id}/lease；释放改走 DELETE /tasks/{id}/claim（claimant 本人，或 task:override 强制释放，未认领幂等 204）",
+        "claim 移除 lease_seconds 入参；ClaimResult = {task}；Task schema 移除 lease 字段",
+        "ErrorCode enum 移除 TASK_LEASE_EXPIRED（error.schema.json 同步）；事件移除 task.lease.expired（event.schema.json 同步；task.claimed/task.released 保留）",
+        "capabilities features task_lease → task_claim；openapi info.version 2.1.0 → 2.2.0（protocol_version 保持 2）",
+        "语义：认领 = tasks.assignee_actor_id 所有权，持有至 release/任务完成，无时间自动过期；死 agent 回收走人工 task:override",
+        "CLI 同轮跟进：todo claim 去 --lease-seconds，todo lease renew/release 两子命令拆除，新增顶层 todo release"
       ]
     },
     {
