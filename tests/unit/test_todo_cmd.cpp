@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -673,3 +674,191 @@ TEST_CASE("todo tag detach human output names the resolved tag") {
     REQUIRE(result.out.find("Detached auth from task_1") == 0);
 }
 } // namespace
+
+// ---- v2.4 task batch (task-trees / move / batch done) --------------------
+
+TEST_CASE("todo move posts parent_id three-state via PATCH") {
+    ApiFixture fx;
+    json moved = kTaskOne;
+    moved["parent_id"] = "task_2";
+    moved["revision"] = 4;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, moved);    // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Moved task_1 -> task_2") != std::string::npos);
+
+    const client::HttpRequest& patch = fx.fake().requests.back();
+    REQUIRE(patch.method == "PATCH");
+    const json body = json::parse(patch.body);
+    REQUIRE(body.at("parent_id") == "task_2");
+    REQUIRE(body.at("expected_revision") == 3);
+}
+
+TEST_CASE("todo move --to - moves back to the workspace root with null") {
+    ApiFixture fx;
+    json rooted = kTaskOne;
+    rooted["parent_id"] = nullptr;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, rooted);   // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "-"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("workspace root") != std::string::npos);
+
+    const json body = json::parse(fx.fake().requests.back().body);
+    REQUIRE(body.at("parent_id").is_null());
+}
+
+TEST_CASE("todo done with multiple ids batches through batch-update") {
+    ApiFixture fx;
+    json taskB = kTaskOne;
+    taskB["id"] = "task_2";
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read A
+    fx.fake().route("/tasks/task_2", 200, taskB);    // revision read B
+    json batch = json{{"items", json::array({kTaskOne, taskB})}};
+    fx.fake().route("/workspaces/ws_1/tasks/batch-update", 200, batch);
+
+    const RunResult result = runApp({"astral", "todo", "done", "task_1", "task_2", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("items").size() == 2);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.method == "POST");
+    REQUIRE(post.url.find("/workspaces/ws_1/tasks/batch-update") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("items").size() == 2);
+    REQUIRE(body.at("items").at(0).at("task_id") == "task_1");
+    REQUIRE(body.at("items").at(0).at("expected_revision") == 3);
+    REQUIRE(body.at("set").at("status") == "done");
+}
+
+TEST_CASE("todo done with one id keeps the single PATCH path") {
+    ApiFixture fx;
+    json doneTask = kTaskOne;
+    doneTask["status"] = "done";
+    doneTask["revision"] = 4;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, doneTask); // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "done", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    const client::HttpRequest& patch = fx.fake().requests.back();
+    REQUIRE(patch.method == "PATCH");
+}
+
+TEST_CASE("todo add-tree posts nested trees with a deterministic idempotency key") {
+    ApiFixture fx;
+    const json treeIn =
+        json{{"trees", json::array({json{{"title", "Epic"},
+                                         {"children", json::array({json{{"title", "Story"}}})}},
+                                    json{{"title", "Solo"}}})}};
+    const json batchOut = json{
+        {"items",
+         json::array({
+             json{
+                 {"task", json{{"id", "tsk_a"}, {"title", "Epic"}}},
+                 {"children", json::array({json{{"task", json{{"id", "tsk_b"}, {"title", "Story"}}},
+                                                {"children", json::array()}}})}},
+             json{{"task", json{{"id", "tsk_c"}, {"title", "Solo"}}}, {"children", json::array()}},
+         })}};
+    fx.fake().route("/workspaces/ws_1/task-trees", 201, batchOut, /*uses=*/2); // 首发 + 幂等重放
+
+    const auto file = fx.workDir() / "tree.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << treeIn.dump();
+    }
+
+    const RunResult result = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Created 3 task(s) in 2 tree(s)") != std::string::npos);
+    REQUIRE(result.out.find("- tsk_a  Epic") != std::string::npos);
+    REQUIRE(result.out.find("    - tsk_b  Story") != std::string::npos);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.method == "POST");
+    REQUIRE(post.url.find("/workspaces/ws_1/task-trees") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("trees").size() == 2);
+    REQUIRE(body.at("trees").at(0).at("children").at(0).at("title") == "Story");
+
+    // Idempotency-Key: present, deterministic prefix, stable across reruns.
+    std::string keyA;
+    for (const auto& h : post.headers) {
+        if (h.first == "Idempotency-Key") {
+            keyA = h.second;
+        }
+    }
+    REQUIRE(keyA.rfind("todo-tree-", 0) == 0);
+
+    const RunResult rerun = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(rerun.exitCode == 0);
+    std::string keyB;
+    for (const auto& h : fx.fake().requests.back().headers) {
+        if (h.first == "Idempotency-Key") {
+            keyB = h.second;
+        }
+    }
+    REQUIRE(keyA == keyB);
+}
+
+TEST_CASE("todo add-tree --parent targets the task container") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_9/task-trees", 201, json{{"items", json::array()}});
+
+    const auto file = fx.workDir() / "sub.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << R"([{"title":"Sub"}])"; // bare array form
+    }
+
+    const RunResult result = runApp(
+        {"astral", "todo", "add-tree", "--file", file.string(), "--parent", "task_9", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.url.find("/tasks/task_9/task-trees") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("trees").at(0).at("title") == "Sub");
+}
+
+TEST_CASE("todo add-tree with malformed input is a usage error without network") {
+    ApiFixture fx;
+    const auto file = fx.workDir() / "bad.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << "{not json";
+    }
+    const RunResult result = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(result.exitCode == 2);           // Usage
+    REQUIRE(fx.fake().requests.size() == 0); // parse/usage failure precedes any network
+
+    const auto empty = fx.workDir() / "empty.json";
+    {
+        std::ofstream out(empty, std::ios::binary);
+        out << "{\"trees\": []}";
+    }
+    const RunResult emptyRun = runApp({"astral", "todo", "add-tree", "--file", empty.string()});
+    REQUIRE(emptyRun.exitCode == 2);
+}
+
+TEST_CASE("todo add carries a deterministic idempotency key") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/children", 201, kTaskOne);
+
+    const RunResult result = runApp({"astral", "todo", "add", "Fix login flow"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    std::string key;
+    for (const auto& h : post.headers) {
+        if (h.first == "Idempotency-Key") {
+            key = h.second;
+        }
+    }
+    REQUIRE(key.rfind("todo-", 0) == 0);
+}

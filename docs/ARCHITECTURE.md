@@ -453,9 +453,11 @@ astral init https://astral.example.com/todo --create  # 不存在则创建
 ```text
 astral todo list
 astral todo add "..." --parent <task-id>
+astral todo add-tree --file plan.json [--parent <task-id>]
 astral todo show <task-id>
 astral todo claim <task-id>
-astral todo done <task-id>
+astral todo done <task-id> [task-id ...]
+astral todo move <task-id> --to <parent-task-id|->
 astral todo search --regex <expr> --fuzzy <text>
 ```
 
@@ -471,6 +473,14 @@ workspace 根层，`--parent <task-id>` 切到该任务的 children 集合（只
 任务的 children 集合（服务端 TaskCreate 已无 parent_id 字段）；`todo search`
 走 `/workspaces/{id}/task-search` 平面查询，regex/fuzzy 与
 tag/status/assignee 平权（至少一个条件）。
+
+批量管理（2026-09-30，协议快照 v2.4 / 服务端 task_batch）：`todo add-tree`
+读嵌套 JSON（`{"trees":[...]}` 或裸数组，`--file -` 走 stdin）一次投递整批
+任务树（服务端整批单事务全有或全无；幂等键 = 内容 hash，重跑同文件不双建）；
+`todo done` 传多个 id 时走 `batch-update` 整批完成（逐 id 预读 revision，
+单个 id 保持既有 PATCH 路径）；`todo move --to -` 即 `parent_id: null`
+移回根层。`add`/`add-tree` 均携带确定性 Idempotency-Key（内容派生，
+与 msg/document 同纪律）。
 
 `claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
 GET 任务当前 revision 再提交（读改写窗口由服务端 409

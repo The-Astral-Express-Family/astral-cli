@@ -1,8 +1,8 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "3772f7d",
-  "published_at": "2026-09-26",
+  "source_commit": "e4560a6",
+  "published_at": "2026-09-30",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.3 刷新自 3772f7d（round 41 增量）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现（round 38 起 501 桩清零、NOT_IMPLEMENTED 错误码移除，CLI 不得依赖该码）。本快照 v2.4 刷新自 e4560a6（任务批量管理 + 平台邀请增量）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -23,7 +23,7 @@
     "workspace_resolve": "GET /workspaces?name=<exact-or-slug>；空 items = 不存在或不可见",
     "claim": "POST /tasks/{id}/claim {expected_revision?, lease_seconds?}；竞争失败 409 TASK_ALREADY_CLAIMED；过期续租 409 TASK_LEASE_EXPIRED",
     "sse": "GET /workspaces/{id}/events；keepalive 注释行 15s；resume 已实装：Last-Event-ID 头或 last_event_id query 参数，保留窗口 24h，超窗下发 snapshot.required(reason=cursor_expired) 后断流，客户端须重拉快照；事件消费必须幂等（重放可能重复）；非成员 404（不泄露存在性）/缺 workspace:read 403",
-    "idempotency": "Idempotency-Key：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx（响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束；同键并发在进程内互斥（R8，单实例 MVP）",
+    "idempotency": "Idempotency-Key：携带头即激活，同 actor+endpoint+key 24h 内重放首次 2xx（响应带 X-Astral-Idempotent-Replay: true）；仅响应级去重，副作用幂等依赖端点自身约束；同键并发在进程内互斥（R8，单实例 MVP）；tasks 六个写端点已在 openapi 正式声明 Idempotency-Key header 参数（2.1）",
     "common_headers": "服务端回显 X-Astral-Request-Id 与 X-Astral-Protocol-Version: 2 于全部 /api/v1 响应",
     "approvals": "发起需 workspace:manage_members，裁决仅限 workspace owner；approve 同事务执行 promote；TTL 72h 惰性过期；重复裁决 409 APPROVAL_EXPIRED",
     "task_tags": "PUT/DELETE /tasks/{id}/tags/{tag_id}；attach 幂等（已挂不 bump revision）；detach 幂等（未挂 204）；关联使 task revision +1 并发 task.updated（data.tag_change）",
@@ -37,9 +37,11 @@
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
     "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
     "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
-    "capabilities": "GET /meta/capabilities features 至少含 task_lease 与 document_sync；客户端按 feature 判断能力，不猜测 server 实现版本",
+    "capabilities": "GET /meta/capabilities features 至少含 task_lease、document_sync 与 task_batch；客户端按 feature 判断能力，不猜测 server 实现版本",
     "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
-    "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）"
+    "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）",
+    "task_batch": "任务批量管理（协议 2.1，task_batch）：POST /workspaces/{id}/task-trees 与 POST /tasks/{id}/task-trees（嵌套树批量创建，整批单事务全有或全无；≤50 棵根树、总节点 ≤200、深度 ≤8；响应 items 镜像请求树形，task 内含服务端 id）；POST /workspaces/{id}/tasks/move（批量换父：parent_id=null 回根层；逐项必带 expected_revision，409 details 带 task_id+current_revision；批内互移统一环检测；不支持跨 ws；子树恒跟随）；POST /workspaces/{id}/tasks/batch-update（同值批量改 status/priority/assignee，set 至少一项，assignee_actor_id=null 清空；批量取消= T1 软删语义）；三端点均整批单事务全有或全无，重试=整批重放；事件逐任务 emit 既有词表；audit 每批一条（task.batch_create/batch_move/batch_update）；建议整批携带确定性 Idempotency-Key",
+    "admin_invitations": "平台级注册邀请（2026-09-28）：POST /admin/invitations（签发，code 明文仅一次）/GET /admin/invitations（id 降序游标分页，不回传 code）/POST /admin/invitations/{id}/revoke（幂等 204）；授权复用 platform:users:manage；兑换走既有 POST /auth/register（invite_code 命中平台邀请则账号不入任何 workspace）"
   },
   "breaking_changes": [
     "protocol_version 1 -> 2（旧 CLI 被服务端干净拒绝，须同步升级）",
@@ -51,7 +53,7 @@
     "Task 响应恒填充 tags（空数组兜底，修订 D11）与 children_count",
     "修复：search 结果行内联任务字段（v1 误包在 Task 键下）；tag 模块生产装配补接 DB（v1 全部 tag HTTP 端点 500）"
   ],
-  "synced_at": "2026-09-26",
+  "synced_at": "2026-09-30",
   "revisions": [
     {
       "date": "2026-09-10",
@@ -108,6 +110,18 @@
         "f5b1e32（tag confirm 响应补 workspace_id）是实装补齐——openapi Tag schema 本就 required 该字段，契约无变化；error.schema.json / event.schema.json / well-known.json 逐字不变（已 diff 验证）",
         "保留策略为服务端运维项不入契约：TTL 30d + 每文档 50 版（ASTRAL_DOC_HISTORY_*）",
         "CLI 消费同轮落地（astral-cli 5c32909：document history / get --revision / push --force 盲推门）；protocol_version 与 min_cli_protocol_version 维持 2，纯增量无版本号变化"
+      ]
+    },
+    {
+      "date": "2026-09-30",
+      "label": "v2.4 快照刷新（任务批量管理 + 平台邀请）",
+      "from_commit": "3772f7d",
+      "to_commit": "e4560a6",
+      "changes": [
+        "任务批量管理（modulator PR #7，协议 2.1 info.version）：新增 POST /workspaces/{id}/task-trees、POST /tasks/{id}/task-trees、POST /workspaces/{id}/tasks/move、POST /workspaces/{id}/tasks/batch-update；schema +TaskTreeNode/TaskTreeBatch/TaskTreeNodeCreated/TaskTreeBatchCreated/TaskMoveItem/TaskMoveBatch/TaskBatchUpdateItem/TaskBatchUpdate/TaskBatchResult",
+        "capabilities features += task_batch；Idempotency-Key 由 summary 散文正式化为 header 参数（挂 tasks 六个写端点）",
+        "一并携带 8c25bd0（2026-09-28 平台级注册邀请三端点 + admin_invitations 语义，上一轮快照未跟进项）",
+        "protocol_version 与 min_cli_protocol_version 维持 2，纯增量无版本号变化；error.schema.json / event.schema.json / well-known.json 无变化（已 diff 验证）"
       ]
     }
   ]

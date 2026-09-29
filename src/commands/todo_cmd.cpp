@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,10 +15,12 @@
 #include "auth/api.hpp"
 #include "commands/command.hpp"
 #include "commands/paging.hpp"
+#include "core/content_hash.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
 #include "output/style.hpp"
+#include "platform/stdin.hpp"
 
 namespace astral::commands {
 
@@ -36,6 +39,28 @@ const char* const kTaskPriorities[] = {"low", "normal", "high", "urgent"};
 
 std::string padRight(const std::string& text, std::size_t width) {
     return text.size() >= width ? text : text + std::string(width - text.size(), ' ');
+}
+
+// add-tree 响应（TaskTreeBatchCreated）的节点统计与缩进渲染：镜像请求
+// 树形，子层两空格缩进，行内 id + title。
+void countTreeNodes(const json& nodes, std::size_t& total) {
+    for (const auto& node : nodes) {
+        ++total;
+        if (auto children = node.find("children"); children != node.end() && children->is_array()) {
+            countTreeNodes(*children, total);
+        }
+    }
+}
+
+void printTreeCreated(std::ostream& out, const json& nodes, int depth) {
+    for (const auto& node : nodes) {
+        const json& task = node.at("task");
+        out << std::string(static_cast<std::size_t>(depth) * 2, ' ') << "- " << scalarOr(task, "id")
+            << "  " << scalarOr(task, "title") << '\n';
+        if (auto children = node.find("children"); children != node.end() && children->is_array()) {
+            printTreeCreated(out, *children, depth + 1);
+        }
+    }
 }
 
 // Task list/search read flags: shared paging (--limit/--all) + the
@@ -231,10 +256,26 @@ public:
             ->add_option("--lease-seconds", leaseSeconds_, "Lease duration, 30..3600 (default 300)")
             ->check(CLI::Range(30, 3600));
 
-        CLI::App* done = app.add_subcommand("done", "Mark a task done (optimistic concurrency)");
-        done->add_option("task_id", taskId_, "Task id")->required();
+        CLI::App* done = app.add_subcommand("done", "Mark task(s) done (1 = PATCH, N = batch)");
+        done->add_option("task_id", doneIds_, "Task ids (one or more)")->required()->expected(-1);
         done->add_option("--revision", revision_,
-                         "Expected revision (default: read the task's current revision)");
+                         "Expected revision (single-id form only; default: read the current one)");
+
+        // 协议 2.1 task_batch：批量树形创建——嵌套 JSON 一次投递整棵子树
+        // （--parent 选 task 容器，缺省 workspace 根层）；确定性幂等键使
+        // 重跑安全（服务端整批单事务全有或全无）。
+        CLI::App* addTree = app.add_subcommand(
+            "add-tree", "Create a batch of task trees from a nested JSON file (or '-' for stdin)");
+        addTree->add_option("--file", treeFile_, "JSON file: {\"trees\":[...]} or a bare array")
+            ->required();
+        addTree->add_option("--parent", parent_, "Create the trees under this task");
+
+        // v2.1：移动 = PATCH parent_id 三态；'-' 表示移回根层（null）。
+        CLI::App* move =
+            app.add_subcommand("move", "Move a task under another container ('-' = root)");
+        move->add_option("task_id", taskId_, "Task id")->required();
+        move->add_option("--to", moveTo_, "New parent task id, or '-' for the workspace root")
+            ->required();
 
         CLI::App* update =
             app.add_subcommand("update", "Update task fields (optimistic concurrency)");
@@ -282,6 +323,8 @@ public:
 
         listSub_ = list;
         addSub_ = add;
+        addTreeSub_ = addTree;
+        moveSub_ = move;
         showSub_ = show;
         claimSub_ = claim;
         doneSub_ = done;
@@ -301,6 +344,12 @@ public:
         }
         if (node_->got_subcommand(addSub_)) {
             return runAdd(context);
+        }
+        if (node_->got_subcommand(addTreeSub_)) {
+            return runAddTree(context);
+        }
+        if (node_->got_subcommand(moveSub_)) {
+            return runMove(context);
         }
         if (node_->got_subcommand(showSub_)) {
             return runShow(context);
@@ -436,7 +485,16 @@ private:
 
         const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
                                                  : "/tasks/" + parent_ + "/children";
-        const json task = auth::sendJson(api, "POST", path, body, "task create");
+        // 重试不得双建：确定性 Idempotency-Key（同 actor+endpoint+key 24h
+        // 重放首次 2xx；key 源覆盖全部创建入参，与 msg/document 同纪律）。
+        std::string keySource =
+            ws.workspaceId + "|" + parent_ + "|" + title_ + "|" + description_ + "|" + priority_;
+        for (const std::string& tag : tags_) {
+            keySource += "|" + tag;
+        }
+        const json task =
+            auth::sendJson(api, "POST", path, body, "task create",
+                           {{"Idempotency-Key", "todo-" + core::fnv1aHex(keySource)}});
 
         if (context.json) {
             output::printJson(context.out, task);
@@ -486,15 +544,121 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
-        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
+        // 单 id：走既有 PATCH（逐任务乐观并发，行为与批量语义一致）。
+        if (doneIds_.size() == 1) {
+            taskId_ = doneIds_.front();
+            const json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
+            const json task =
+                auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
+
+            if (context.json) {
+                output::printJson(context.out, task);
+                return 0;
+            }
+            context.out << "Marked " << taskId_ << " done (revision " << scalarOr(task, "revision")
+                        << ")\n";
+            return 0;
+        }
+
+        // 多 id：协议 2.1 batch-update 一次整批（服务端单事务全有或全无，
+        // 部分失败时整批不生效，重跑安全——revision 预读自当前状态）。
+        json items = json::array();
+        for (const std::string& id : doneIds_) {
+            items.push_back(json{{"task_id", id}, {"expected_revision", currentRevision(api, id)}});
+        }
+        const json body{
+            {"items", items},
+            {"set", json{{"status", "done"}}},
+        };
+        const json result =
+            auth::sendJson(api, "POST", "/workspaces/" + ws.workspaceId + "/tasks/batch-update",
+                           body, "task batch update");
+
+        if (context.json) {
+            output::printJson(context.out, result); // TaskBatchResult {items} verbatim
+            return 0;
+        }
+        for (const auto& task : result.at("items")) {
+            context.out << "Marked " << scalarOr(task, "id") << " done (revision "
+                        << scalarOr(task, "revision") << ")\n";
+        }
+        return 0;
+    }
+
+    // runMove：PATCH parent_id 三态（'-' = null = 根层）；移动语义与字段
+    // 更新分属不同动词，与 update 共享 revision 节拍。
+    int runMove(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        json body{{"expected_revision", expectedRevision(api)}};
+        if (moveTo_ == "-") {
+            body["parent_id"] = nullptr;
+        } else {
+            body["parent_id"] = moveTo_;
+        }
+        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task move");
 
         if (context.json) {
             output::printJson(context.out, task);
             return 0;
         }
-        context.out << "Marked " << taskId_ << " done (revision " << scalarOr(task, "revision")
-                    << ")\n";
+        context.out << "Moved " << taskId_ << " -> "
+                    << (moveTo_ == "-" ? std::string("workspace root") : moveTo_) << " (revision "
+                    << scalarOr(task, "revision") << ")\n";
+        return 0;
+    }
+
+    // runAddTree：嵌套 JSON 一次投递（协议 2.1 task-trees）。输入接受
+    // {"trees":[...]} 或裸数组；幂等键 = 内容 hash，重跑同文件服务端重放
+    // 首次响应，不会双建。
+    int runAddTree(const CommandContext& context) {
+        std::string content;
+        if (treeFile_ == "-") {
+            content = platform::readStdinBinary();
+        } else {
+            std::ifstream input(treeFile_, std::ios::binary);
+            if (!input) {
+                throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
+            }
+            // 分块读取（istreambuf_iterator 被 AGENTS.md 禁用）。
+            char buffer[8192];
+            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
+                content.append(buffer, static_cast<std::size_t>(input.gcount()));
+            }
+        }
+        json parsed;
+        try {
+            parsed = json::parse(content);
+        } catch (const json::parse_error& error) {
+            throw core::AstralError(core::Errc::Usage,
+                                    std::string("invalid JSON input: ") + error.what());
+        }
+        json trees = parsed.contains("trees") ? parsed.at("trees") : parsed;
+        if (!trees.is_array() || trees.empty()) {
+            throw core::AstralError(
+                core::Errc::Usage,
+                "input must be {\"trees\":[...]} or a non-empty array of task nodes");
+        }
+
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/task-trees"
+                                                 : "/tasks/" + parent_ + "/task-trees";
+        const json body{{"trees", trees}};
+        const json result = auth::sendJson(
+            api, "POST", path, body, "task tree create",
+            {{"Idempotency-Key",
+              "todo-tree-" + core::fnv1aHex(ws.workspaceId + "|" + parent_ + "|" + content)}});
+
+        if (context.json) {
+            output::printJson(context.out, result); // TaskTreeBatchCreated verbatim
+            return 0;
+        }
+        const json& created = result.at("items");
+        std::size_t total = 0;
+        countTreeNodes(created, total);
+        context.out << "Created " << total << " task(s) in " << created.size() << " tree(s):\n";
+        printTreeCreated(context.out, created, 1);
         return 0;
     }
 
@@ -617,6 +781,8 @@ private:
     CLI::App* node_ = nullptr;
     CLI::App* listSub_ = nullptr;
     CLI::App* addSub_ = nullptr;
+    CLI::App* addTreeSub_ = nullptr;
+    CLI::App* moveSub_ = nullptr;
     CLI::App* showSub_ = nullptr;
     CLI::App* claimSub_ = nullptr;
     CLI::App* doneSub_ = nullptr;
@@ -637,6 +803,9 @@ private:
     std::string description_;
     std::vector<std::string> tags_;
     std::string taskId_;
+    std::vector<std::string> doneIds_;
+    std::string treeFile_;
+    std::string moveTo_;
     std::optional<std::int64_t> revision_;
     std::optional<int> leaseSeconds_;
     std::string regex_;

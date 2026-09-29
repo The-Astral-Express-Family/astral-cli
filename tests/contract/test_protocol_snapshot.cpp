@@ -88,6 +88,31 @@ TEST_CASE("documents endpoints are pinned in the frozen snapshot") {
     REQUIRE(openapi.find("base_revision") != std::string::npos);
 }
 
+TEST_CASE("task batch endpoints are pinned in the frozen snapshot (v2.4)") {
+    const std::string openapi = snapshotFile("openapi.yaml");
+    for (const char* const needle : {
+             "/workspaces/{workspace_id}/task-trees:",
+             "/tasks/{task_id}/task-trees:",
+             "/workspaces/{workspace_id}/tasks/move:",
+             "/workspaces/{workspace_id}/tasks/batch-update:",
+             "createTaskTrees",
+             "createChildTaskTrees",
+             "moveTasks",
+             "batchUpdateTasks",
+             // CLI 消费所依赖的 schema 名与上限语义（batch 路径/信封）。
+             "TaskTreeNode:",
+             "TaskTreeBatch:",
+             "TaskTreeBatchCreated:",
+             "TaskMoveBatch:",
+             "TaskBatchUpdate:",
+             "TaskBatchResult:",
+             "task_batch", // capabilities feature
+         }) {
+        INFO("needle: " << needle);
+        REQUIRE(openapi.find(needle) != std::string::npos);
+    }
+}
+
 TEST_CASE("error enum covers the codes this CLI branches on") {
     const auto schema = snapshotJson("error.schema.json");
     const auto codes = schema.at("$defs").at("ErrorCode").at("enum");
