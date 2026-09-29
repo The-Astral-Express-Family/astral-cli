@@ -493,7 +493,10 @@ claim/done（服务端裁决：只表达/展示/过滤）。
 `claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
 GET 任务当前 revision 再提交（读改写窗口由服务端 409
 `REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过
-读取、原样提交。`list`/`search` 分页：默认单页，`--all` 跟随
+读取、原样提交。**2.3 租约拆除**（协议快照 v2.6，与 astral-modulator PR #10
+两仓锁定同步）：认领无时间维度（持有至 release），`todo lease renew/release`
+移除、`--lease-seconds` 移除，释放改 `todo release <task_id>`
+（DELETE /tasks/{id}/claim，claimant 或 task:override，幂等 204）。`list`/`search` 分页：默认单页，`--all` 跟随
 `next_cursor` 取尽；`--json` 输出单对象（含 `items` 与最终
 `next_cursor`），非流式 JSON Lines。目标解析（server/workspace）遵循
 第 10 节优先级；鉴权遵循 §6.3：`ASTRAL_TOKEN` 优先，否则 human 会话槽 +

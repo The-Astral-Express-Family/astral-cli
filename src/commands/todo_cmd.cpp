@@ -165,12 +165,6 @@ void printTaskDetail(std::ostream& out, const Painter& paint, const json& task) 
     line("blocks", joinIds(task, "blocks"));
     line("related", joinIds(task, "related"));
     line("revision", scalarOr(task, "revision"));
-    if (auto lease = task.find("lease"); lease != task.end() && lease->is_object()) {
-        line("lease",
-             scalarOr(*lease, "holder_actor_id") + " until " + scalarOr(*lease, "expires_at"));
-    } else {
-        line("lease", "-");
-    }
     std::string tags;
     if (auto array = task.find("tags"); array != task.end() && array->is_array()) {
         for (const auto& tag : *array) {
@@ -272,16 +266,15 @@ public:
         add->add_option("--description", description_, "Task description");
         add->add_option("--tag", tags_, "Existing tag name (repeatable)");
 
-        CLI::App* show = app.add_subcommand("show", "Show one task (includes tags and lease)");
+        CLI::App* show =
+            app.add_subcommand("show", "Show one task (includes tags and dependencies)");
         show->add_option("task_id", taskId_, "Task id")->required();
 
-        CLI::App* claim = app.add_subcommand("claim", "Atomically claim a task (acquire lease)");
+        CLI::App* claim =
+            app.add_subcommand("claim", "Atomically claim a task (assign yourself + in_progress)");
         claim->add_option("task_id", taskId_, "Task id")->required();
         claim->add_option("--revision", revision_,
                           "Expected revision (default: read the task's current revision)");
-        claim
-            ->add_option("--lease-seconds", leaseSeconds_, "Lease duration, 30..3600 (default 300)")
-            ->check(CLI::Range(30, 3600));
 
         CLI::App* done = app.add_subcommand("done", "Mark task(s) done (1 = PATCH, N = batch)");
         done->add_option("task_id", doneIds_, "Task ids (one or more)")->required()->expected(-1);
@@ -320,12 +313,10 @@ public:
         update->add_option("--revision", revision_,
                            "Expected revision (default: read the task's current revision)");
 
-        // v2 lease 管理：renew 仅 holder 可续；release 主动让出（204 无响应体）。
-        CLI::App* lease = app.add_subcommand("lease", "Manage the lease on a claimed task");
-        lease->require_subcommand(1);
-        CLI::App* renew = lease->add_subcommand("renew", "Renew a lease you hold (holder only)");
-        renew->add_option("task_id", taskId_, "Task id")->required();
-        CLI::App* release = lease->add_subcommand("release", "Release a lease you hold");
+        // 2.3（租约时间维度拆除）：无 renew/release-lease；释放认领 =
+        // DELETE /tasks/{id}/claim（claimant 或 task:override，幂等 204）。
+        CLI::App* release =
+            app.add_subcommand("release", "Release your claim (or override with task:override)");
         release->add_option("task_id", taskId_, "Task id")->required();
 
         // 协议 2.2 task_dependencies：依赖边管理。方向 = <task_id> 依赖
@@ -374,9 +365,7 @@ public:
         doneSub_ = done;
         searchSub_ = search;
         updateSub_ = update;
-        leaseSub_ = lease;
-        leaseRenewSub_ = renew;
-        leaseReleaseSub_ = release;
+        releaseSub_ = release;
         depSub_ = dep;
         depAddSub_ = depAdd;
         depRemoveSub_ = depRemove;
@@ -414,14 +403,8 @@ public:
         if (node_->got_subcommand(updateSub_)) {
             return runUpdate(context);
         }
-        if (node_->got_subcommand(leaseSub_)) {
-            if (leaseSub_->got_subcommand(leaseRenewSub_)) {
-                return runLeaseRenew(context);
-            }
-            if (leaseSub_->got_subcommand(leaseReleaseSub_)) {
-                return runLeaseRelease(context);
-            }
-            throw core::AstralError(core::Errc::Usage, "no todo lease subcommand selected");
+        if (node_->got_subcommand(releaseSub_)) {
+            return runRelease(context);
         }
         if (node_->got_subcommand(depSub_)) {
             if (depSub_->got_subcommand(depAddSub_)) {
@@ -584,18 +567,16 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const json body{{"expected_revision", expectedRevision(api)},
-                        {"lease_seconds", leaseSeconds_.value_or(300)}};
-        const json result =
+        const json body{{"expected_revision", expectedRevision(api)}};
+        const json task =
             auth::sendJson(api, "POST", "/tasks/" + taskId_ + "/claim", body, "task claim");
 
         if (context.json) {
-            output::printJson(context.out, result); // ClaimResult {task, lease} verbatim
+            output::printJson(context.out, task); // Task verbatim（2.3 ClaimResult={task}）
             return 0;
         }
-        const json& lease = result.at("lease");
-        context.out << "Claimed " << taskId_ << " - holder " << scalarOr(lease, "holder_actor_id")
-                    << " until " << scalarOr(lease, "expires_at") << '\n';
+        context.out << "Claimed " << taskId_ << " (assignee " << scalarOr(task, "assignee_actor_id")
+                    << ", revision " << scalarOr(task, "revision") << ")" << '\n';
         return 0;
     }
 
@@ -763,39 +744,21 @@ private:
         return 0;
     }
 
-    int runLeaseRenew(const CommandContext& context) {
+    // runRelease：DELETE /tasks/{id}/claim（2.3 租约拆除：claimant 或
+    // task:override；204 幂等——已无认领同样 204）。
+    int runRelease(const CommandContext& context) {
         // One session per run: discovery exactly once; unresolvable targets get the
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        // 协议无 requestBody，带 body 反而不洁：走无 body 请求。
-        const client::HttpResponse response =
-            auth::sendNoBody(api, "POST", "/tasks/" + taskId_ + "/lease/renew", "lease renew");
-        const json lease = json::parse(response.body);
-
-        if (context.json) {
-            output::printJson(context.out, lease); // Lease verbatim
-            return 0;
-        }
-        context.out << "Renewed " << taskId_ << " lease - holder "
-                    << scalarOr(lease, "holder_actor_id") << " until "
-                    << scalarOr(lease, "expires_at") << '\n';
-        return 0;
-    }
-
-    int runLeaseRelease(const CommandContext& context) {
-        // One session per run: discovery exactly once; unresolvable targets get the
-        // D14 default-workspace hint from openWorkspace.
-        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
-
-        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/lease", "lease release");
+        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/claim", "claim release");
 
         if (context.json) {
             // 204 无响应体：--json 侧的确认单对象是 CLI 呈现，非服务端原样。
             output::printJson(context.out, json{{"released", true}, {"task_id", taskId_}});
             return 0;
         }
-        context.out << "Released lease on " << taskId_ << '\n';
+        context.out << "Released claim on " << taskId_ << '\n';
         return 0;
     }
 
@@ -909,9 +872,7 @@ private:
     CLI::App* doneSub_ = nullptr;
     CLI::App* searchSub_ = nullptr;
     CLI::App* updateSub_ = nullptr;
-    CLI::App* leaseSub_ = nullptr;
-    CLI::App* leaseRenewSub_ = nullptr;
-    CLI::App* leaseReleaseSub_ = nullptr;
+    CLI::App* releaseSub_ = nullptr;
     CLI::App* depSub_ = nullptr;
     CLI::App* depAddSub_ = nullptr;
     CLI::App* depRemoveSub_ = nullptr;
@@ -932,7 +893,6 @@ private:
     std::string treeFile_;
     std::string moveTo_;
     std::optional<std::int64_t> revision_;
-    std::optional<int> leaseSeconds_;
     std::string regex_;
     std::string fuzzy_;
     std::string tag_;

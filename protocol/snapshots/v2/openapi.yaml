@@ -12,7 +12,7 @@
 openapi: 3.1.0
 info:
   title: Astral Modulator Public API
-  version: 2.2.0
+  version: 2.3.0
   license:
     name: MIT
     identifier: MIT
@@ -833,7 +833,7 @@ paths:
   /tasks/{task_id}/claim:
     post:
       tags: [tasks]
-      summary: 原子认领（Phase 1 spike 验收核心）
+      summary: 原子认领（认领持有至释放或任务完成，无时间自动过期）
       operationId: claimTask
       parameters:
         - { $ref: "#/components/parameters/TaskId" }
@@ -846,39 +846,21 @@ paths:
               required: [expected_revision]
               properties:
                 expected_revision: { type: integer, format: int64, minimum: 1 }
-                lease_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
       responses:
         "200":
-          description: 认领成功
+          description: 认领成功（assignee 指派为自己 + status 转 in_progress）
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ClaimResult" }
         "409": { $ref: "#/components/responses/Error" }   # TASK_ALREADY_CLAIMED / REVISION_CONFLICT
-
-  /tasks/{task_id}/lease/renew:
-    post:
-      tags: [tasks]
-      summary: 续租（仅 holder）
-      operationId: renewLease
-      parameters:
-        - { $ref: "#/components/parameters/TaskId" }
-      responses:
-        "200":
-          description: 已续租
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Lease" }
-        "409": { $ref: "#/components/responses/Error" }   # TASK_LEASE_EXPIRED 需重新 claim
-
-  /tasks/{task_id}/lease:
     delete:
       tags: [tasks]
-      summary: 释放（holder；human force release 走 override/approval）
-      operationId: releaseLease
+      summary: 释放认领（claimant 本人；他人需 task:override 强制释放）
+      operationId: releaseClaim
       parameters:
         - { $ref: "#/components/parameters/TaskId" }
       responses:
-        "204": { description: 已释放 }
+        "204": { description: 已释放（未认领时幂等 204） }
 
   /workspaces/{workspace_id}/tags:
     get:
@@ -1700,11 +1682,6 @@ components:
       type: [string, "null"]
       format: date-time
 
-    LeaseOrNull:
-      oneOf:
-        - $ref: "#/components/schemas/Lease"
-        - type: "null"
-
     ErrorCode:
       type: string
       enum:
@@ -1718,7 +1695,6 @@ components:
         - WORKSPACE_NAME_TAKEN
         - TASK_NOT_FOUND
         - TASK_ALREADY_CLAIMED
-        - TASK_LEASE_EXPIRED
         - TAG_PROPOSAL_EXPIRED
         - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
         - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期统一此码（防探测，400）
@@ -1771,7 +1747,7 @@ components:
         features:
           type: array
           items: { type: string }
-          description: 功能开关名（如 task_lease/document_sync_v1/sse_resume）；未列出即不可用
+          description: 功能开关名（如 task_claim/document_sync/task_batch）；未列出即不可用
 
     DeviceAuthorization:
       type: object
@@ -2088,7 +2064,6 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Id" }
           description: 与本任务关联（relates 边）的任务 id 列表（2.2；恒填充）
-        lease: { $ref: "#/components/schemas/LeaseOrNull" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -2216,20 +2191,11 @@ components:
           items: { $ref: "#/components/schemas/Task" }
           description: 按请求 items 顺序返回变更后的任务全量
 
-    Lease:
-      type: object
-      required: [holder_actor_id, expires_at]
-      properties:
-        holder_actor_id: { $ref: "#/components/schemas/Id" }
-        expires_at: { type: string, format: date-time }
-        renewed_at: { type: string, format: date-time }
-
     ClaimResult:
       type: object
-      required: [task, lease]
+      required: [task]
       properties:
         task: { $ref: "#/components/schemas/Task" }
-        lease: { $ref: "#/components/schemas/Lease" }
 
     Tag:
       type: object

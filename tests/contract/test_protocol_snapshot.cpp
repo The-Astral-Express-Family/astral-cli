@@ -113,6 +113,17 @@ TEST_CASE("task batch endpoints are pinned in the frozen snapshot (v2.4)") {
     }
 }
 
+TEST_CASE("lease removal is pinned in the frozen snapshot (v2.6)") {
+    const std::string openapi = snapshotFile("openapi.yaml");
+    // 2.3 租约拆除：释放走 DELETE /tasks/{id}/claim；旧租约端点必须不复存在。
+    for (const char* const needle : {"releaseClaim", "task_claim"}) {
+        INFO("needle: " << needle);
+        REQUIRE(openapi.find(needle) != std::string::npos);
+    }
+    REQUIRE(openapi.find("/tasks/{task_id}/lease/renew:") == std::string::npos);
+    REQUIRE(openapi.find("TASK_LEASE_EXPIRED") == std::string::npos);
+}
+
 TEST_CASE("task dependency endpoints are pinned in the frozen snapshot (v2.5)") {
     const std::string openapi = snapshotFile("openapi.yaml");
     for (const char* const needle : {

@@ -47,16 +47,14 @@ const json kTaskOne = json{
     {"priority", "high"},
     {"assignee_actor_id", nullptr},
     {"revision", 3},
-    {"lease", nullptr},
     {"created_at", "2026-09-10T00:00:00Z"},
     {"updated_at", "2026-09-10T00:00:00Z"},
 };
 
 const json kTaskPage = json{{"items", json::array({kTaskOne})}, {"next_cursor", nullptr}};
 
-const json kClaimResult =
-    json{{"task", kTaskOne},
-         {"lease", {{"holder_actor_id", "usr_1"}, {"expires_at", "2026-09-10T01:00:00Z"}}}};
+// 2.3：ClaimResult = {task}（租约拆除，认领持有至 release）。
+const json kClaimed = json{{"id", "task_1"}, {"assignee_actor_id", "agt_a1"}, {"revision", 4}};
 
 // ---- tests ---------------------------------------------------------------
 
@@ -151,27 +149,27 @@ TEST_CASE("todo claim reads the current revision then posts it") {
     // Ordered consumption: first /tasks/task_1 hit is the revision GET, the
     // /claim hit is the POST (its URL also contains the shorter needles, so
     // routes must be declared with the claim route consuming its own hit).
-    fx.fake().route("/tasks/task_1/claim", 200, kClaimResult);
+    fx.fake().route("/tasks/task_1/claim", 200, kClaimed);
     fx.fake().route("/tasks/task_1", 200, kTaskOne);
 
     const RunResult result = runApp({"astral", "todo", "claim", "task_1", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
-    REQUIRE(payload.at("task").at("id") == "task_1");
-    REQUIRE(payload.at("lease").at("holder_actor_id") == "usr_1");
+    REQUIRE(payload.at("id") == "task_1");
+    REQUIRE(payload.at("assignee_actor_id") == "agt_a1");
 
-    // GET (revision read) precedes the claim POST; lease default applied.
+    // GET (revision read) precedes the claim POST; no lease_seconds (2.3).
     const client::HttpRequest& claimRequest = fx.fake().requests.back();
     REQUIRE(claimRequest.method == "POST");
     const json body = json::parse(claimRequest.body);
     REQUIRE(body.at("expected_revision") == 3);
-    REQUIRE(body.at("lease_seconds") == 300);
+    REQUIRE(body.find("lease_seconds") == body.end());
 }
 
 TEST_CASE("todo claim --revision skips the lookup and pins the body") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/claim", 200, kClaimResult);
+    fx.fake().route("/tasks/task_1/claim", 200, kClaimed);
 
     const RunResult result =
         runApp({"astral", "todo", "claim", "task_1", "--revision", "7", "--json"});
@@ -205,9 +203,10 @@ TEST_CASE("todo done patches status with optimistic concurrency") {
 
 TEST_CASE("server conflict surfaces as exit 5 with the protocol code") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/claim", 409,
-                    json::parse(errorEnvelopeBody("TASK_ALREADY_CLAIMED", "someone holds the lease",
-                                                  false, "req_conflict")));
+    fx.fake().route(
+        "/tasks/task_1/claim", 409,
+        json::parse(errorEnvelopeBody("TASK_ALREADY_CLAIMED", "someone already claims this task",
+                                      false, "req_conflict")));
     fx.fake().route("/tasks/task_1", 200, kTaskOne);
 
     const RunResult result = runApp({"astral", "todo", "claim", "task_1", "--json"});
@@ -417,11 +416,7 @@ TEST_CASE("todo add without any target carries the D14 default-workspace hint") 
     REQUIRE(result.err.find("default/<your-name>/todo") != std::string::npos);
 }
 
-// ---- update / lease / tag（协议 v2 扩展面） --------------------------------
-
-const json kLease = json{{"holder_actor_id", "usr_1"},
-                         {"expires_at", "2026-09-10T01:05:00Z"},
-                         {"renewed_at", "2026-09-10T01:00:00Z"}};
+// ---- update / release / tag（协议 v2 扩展面） --------------------------------
 
 const json kTagPage = json{
     {"items", json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}})},
@@ -514,76 +509,29 @@ TEST_CASE("todo update conflict surfaces the REVISION_CONFLICT protocol code") {
     REQUIRE(payload.at("error").at("request_id") == "req_rev");
 }
 
-TEST_CASE("todo lease renew posts bodyless and prints the lease verbatim") {
+TEST_CASE("todo release deletes the claim and confirms with one object") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
+    fx.fake().route("/tasks/task_1/claim", 204, json::object());
 
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
-    REQUIRE(result.exitCode == 0);
-
-    const json payload = json::parse(result.out);
-    REQUIRE(payload == kLease);
-
-    const client::HttpRequest& renew = fx.fake().requests.back();
-    REQUIRE(renew.method == "POST");
-    REQUIRE(renew.url.find("/tasks/task_1/lease/renew") != std::string::npos);
-    REQUIRE(renew.body.empty()); // the endpoint takes no requestBody
-}
-
-TEST_CASE("todo lease renew human output names holder and expiry") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
-
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1"});
-    REQUIRE(result.exitCode == 0);
-    REQUIRE(result.out.find("Renewed task_1 lease") == 0);
-    REQUIRE(result.out.find("usr_1") != std::string::npos);
-    REQUIRE(result.out.find("2026-09-10T01:05:00Z") != std::string::npos);
-    REQUIRE(result.out.find('\x1b') == std::string::npos);
-}
-
-TEST_CASE("todo lease renew expired surfaces TASK_LEASE_EXPIRED") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 409,
-                    json::parse(errorEnvelopeBody("TASK_LEASE_EXPIRED", "lease expired, re-claim",
-                                                  false, "req_lease")));
-
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
-    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Conflict));
-
-    const json payload = json::parse(result.out);
-    REQUIRE(payload.at("error").at("code") == "TASK_LEASE_EXPIRED");
-}
-
-TEST_CASE("todo lease release deletes the lease and confirms with one object") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease", 204, json::object()); // empty 204 body
-
-    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1", "--json"});
+    const RunResult result = runApp({"astral", "todo", "release", "task_1", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
     REQUIRE(payload.at("released") == true);
     REQUIRE(payload.at("task_id") == "task_1");
 
-    const client::HttpRequest& release = fx.fake().requests.back();
-    REQUIRE(release.method == "DELETE");
-    REQUIRE(release.url.find("/tasks/task_1/lease") != std::string::npos);
+    const client::HttpRequest& del = fx.fake().requests.back();
+    REQUIRE(del.method == "DELETE");
+    REQUIRE(del.url.find("/tasks/task_1/claim") != std::string::npos);
 }
 
-TEST_CASE("todo lease release human output prints one confirmation line") {
+TEST_CASE("todo release human output prints one confirmation line") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease", 204, json::object());
+    fx.fake().route("/tasks/task_1/claim", 204, json::object());
 
-    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1"});
+    const RunResult result = runApp({"astral", "todo", "release", "task_1"});
     REQUIRE(result.exitCode == 0);
-    REQUIRE(result.out.find("Released lease on task_1") == 0);
-}
-
-TEST_CASE("todo lease without a subcommand is a usage error") {
-    ApiFixture fx;
-    const RunResult result = runApp({"astral", "todo", "lease"});
-    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+    REQUIRE(result.out.find("Released claim on task_1") == 0);
 }
 
 TEST_CASE("todo tag without a subcommand is a usage error") {
