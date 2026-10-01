@@ -12,7 +12,7 @@
 openapi: 3.1.0
 info:
   title: Astral Modulator Public API
-  version: 2.4.0
+  version: 2.5.0
   license:
     name: MIT
     identifier: MIT
@@ -42,6 +42,14 @@ info:
     children 集合按 position 升序返回（cursor 同步换为 position 键集分页）；
     move 端点 items 增可选 position——同一次调用完成换父与兄弟内排序
     （拖拽重排的基础）。老数据回填 = 创建正序，此后创建一律追加兄弟尾部。
+
+    2.5（密码找回 + 邀请邮件，TODO.md §9 2026-10-01）：新增公共端点
+    POST /auth/password-reset（恒 204 防枚举）与 POST /auth/password-reset/
+    confirm（一次性 token 换新口令，成功吊销全部会话）；错误码增
+    PASSWORD_RESET_INVALID。邀请签发（InvitationCreate）增可选 email——
+    签发即经邮件投递链接与明文码（与站内渠道同一行同一码，撤销/过期/兑换
+    两渠道同时失效），Invitation 增 email / email_sent_at 视图字段。
+    邮件投递依赖服务端 ASTRAL_SMTP_URL（未配置 = 链接写服务器日志）。
 
     已裁决的文档分歧（详见 TODO.md「文档分歧裁决」D1-D4）：
     - Device flow 采用 `/auth/device/authorizations*` 路径。
@@ -160,6 +168,52 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Error" }
+
+  /auth/password-reset:
+    post:
+      tags: [auth]
+      summary: 忘记密码：请求重置邮件（恒 204 防枚举——无论邮箱是否存在；两端口点均入敏感限流桶）
+      security: []
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "204":
+          description: >
+            已受理。邮箱存在且账号未停用时投递含一次性链接的邮件（30 分钟有效，
+            {WebBaseURL}/reset-password?token=prt_…）；单活跃——新请求使旧
+            token/邮件立即失效。投递依赖服务端 ASTRAL_SMTP_URL（未配置时链接
+            写服务器日志，见 docs/deployment.md）。
+        "400": { $ref: "#/components/responses/Error" }   # VALIDATION_FAILED（邮箱形状非法）
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      summary: 凭一次性 token 设置新密码（成功后该账号全部会话被吊销，需重新登录）
+      security: []
+      operationId: confirmPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string, description: 重置邮件链接中的 prt_ token（一次性，30 分钟） }
+                new_password: { type: string, minLength: 8, maxLength: 72, description: 需含字母与数字 }
+      responses:
+        "204": { description: 已重置（口令已换、全部会话已吊销） }
+        "400": { $ref: "#/components/responses/Error" }   # PASSWORD_RESET_INVALID（查无/过期/已用，统一防探测）或 VALIDATION_FAILED（新口令策略不过；token 不消耗）
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /auth/device/authorizations:
     post:
@@ -1295,7 +1349,10 @@ paths:
             schema: { $ref: "#/components/schemas/InvitationCreate" }
       responses:
         "201":
-          description: 已签发；code 明文仅本次返回，invite_url 为拼好的入伙链接（/join?ws=）
+          description: >
+            已签发；code 明文仅本次返回，invite_url 为拼好的入伙链接（/join?ws=）。
+            带 email 签发时同时经邮件投递链接与明文码（00024）：投递成功响应带
+            email_sent_at，失败则缺席（行已落库、码仍可用，可重签重投）。
           content:
             application/json:
               schema: { $ref: "#/components/schemas/InvitationCreated" }
@@ -1736,6 +1793,7 @@ components:
         - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期/类型不符统一此码（防探测，400）
         - ALREADY_MEMBER          # 兑码入伙时已是该 workspace 成员（409，ADR-0009）
         - EMAIL_TAKEN             # email 已被注册（409，仅邀请码验证通过后可达）
+        - PASSWORD_RESET_INVALID  # 重置 token 查无/过期/已用统一此码（400，防探测，仅 /auth/password-reset/confirm 可达）
         - TAG_ALREADY_EXISTS
         - REVISION_CONFLICT
         - DOCUMENT_CONFLICT
@@ -1947,6 +2005,15 @@ components:
           maximum: 2592000
           default: 604800
           description: 有效期（秒）；缺省 7 天，上限 30 天
+        email:
+          type: string
+          format: email
+          description: >
+            可选投递目标（00024）：提供即经邮件投递入伙链接与明文码（链接与
+            站内码同一行同一生命周期——撤销/过期/兑换两渠道同时失效）；同
+            (workspace, email) 的在途邀请在签发事务内整批撤销（重签即旧链接
+            立即失效）。投递结果以响应/列表的 email_sent_at 呈现（NULL =
+            未送达或未配置 ASTRAL_SMTP_URL，明文码仍在响应中可手动转发）。
 
     Invitation:
       type: object
@@ -1964,6 +2031,14 @@ components:
         expires_at: { type: string, format: date-time }
         redeemed_by: { $ref: "#/components/schemas/IdOrNull" }
         redeemed_at: { $ref: "#/components/schemas/DateTimeOrNull" }
+        email:
+          type: string
+          format: email
+          description: 邮件投递目标（仅邮件渠道签发时出现；小写归一化）
+        email_sent_at:
+          type: string
+          format: date-time
+          description: 邮件投递成功时刻（字段缺席 = 未送达或未走邮件渠道）
 
     InvitationCreated:
       allOf:
