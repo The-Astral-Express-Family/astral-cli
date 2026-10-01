@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/exit_codes.hpp"
+#include "core/version.hpp"
 #include "platform/args.hpp"
 #include "support/api_fixture.hpp"
 
@@ -48,6 +49,7 @@ TEST_CASE("astral version --json pins the machine contract") {
     REQUIRE(payload.contains("version"));
     REQUIRE(payload.contains("platform"));
     REQUIRE(payload.contains("git"));
+    REQUIRE(payload.contains("embedVersion"));
 }
 
 TEST_CASE("the --version flag prints the version and exits 0") {

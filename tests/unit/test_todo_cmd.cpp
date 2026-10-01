@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -46,16 +47,14 @@ const json kTaskOne = json{
     {"priority", "high"},
     {"assignee_actor_id", nullptr},
     {"revision", 3},
-    {"lease", nullptr},
     {"created_at", "2026-09-10T00:00:00Z"},
     {"updated_at", "2026-09-10T00:00:00Z"},
 };
 
 const json kTaskPage = json{{"items", json::array({kTaskOne})}, {"next_cursor", nullptr}};
 
-const json kClaimResult =
-    json{{"task", kTaskOne},
-         {"lease", {{"holder_actor_id", "usr_1"}, {"expires_at", "2026-09-10T01:00:00Z"}}}};
+// 2.3：ClaimResult = {task}（租约拆除，认领持有至 release）。
+const json kClaimed = json{{"id", "task_1"}, {"assignee_actor_id", "agt_a1"}, {"revision", 4}};
 
 // ---- tests ---------------------------------------------------------------
 
@@ -150,27 +149,27 @@ TEST_CASE("todo claim reads the current revision then posts it") {
     // Ordered consumption: first /tasks/task_1 hit is the revision GET, the
     // /claim hit is the POST (its URL also contains the shorter needles, so
     // routes must be declared with the claim route consuming its own hit).
-    fx.fake().route("/tasks/task_1/claim", 200, kClaimResult);
+    fx.fake().route("/tasks/task_1/claim", 200, kClaimed);
     fx.fake().route("/tasks/task_1", 200, kTaskOne);
 
     const RunResult result = runApp({"astral", "todo", "claim", "task_1", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
-    REQUIRE(payload.at("task").at("id") == "task_1");
-    REQUIRE(payload.at("lease").at("holder_actor_id") == "usr_1");
+    REQUIRE(payload.at("id") == "task_1");
+    REQUIRE(payload.at("assignee_actor_id") == "agt_a1");
 
-    // GET (revision read) precedes the claim POST; lease default applied.
+    // GET (revision read) precedes the claim POST; no lease_seconds (2.3).
     const client::HttpRequest& claimRequest = fx.fake().requests.back();
     REQUIRE(claimRequest.method == "POST");
     const json body = json::parse(claimRequest.body);
     REQUIRE(body.at("expected_revision") == 3);
-    REQUIRE(body.at("lease_seconds") == 300);
+    REQUIRE(body.find("lease_seconds") == body.end());
 }
 
 TEST_CASE("todo claim --revision skips the lookup and pins the body") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/claim", 200, kClaimResult);
+    fx.fake().route("/tasks/task_1/claim", 200, kClaimed);
 
     const RunResult result =
         runApp({"astral", "todo", "claim", "task_1", "--revision", "7", "--json"});
@@ -204,9 +203,10 @@ TEST_CASE("todo done patches status with optimistic concurrency") {
 
 TEST_CASE("server conflict surfaces as exit 5 with the protocol code") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/claim", 409,
-                    json::parse(errorEnvelopeBody("TASK_ALREADY_CLAIMED", "someone holds the lease",
-                                                  false, "req_conflict")));
+    fx.fake().route(
+        "/tasks/task_1/claim", 409,
+        json::parse(errorEnvelopeBody("TASK_ALREADY_CLAIMED", "someone already claims this task",
+                                      false, "req_conflict")));
     fx.fake().route("/tasks/task_1", 200, kTaskOne);
 
     const RunResult result = runApp({"astral", "todo", "claim", "task_1", "--json"});
@@ -416,11 +416,7 @@ TEST_CASE("todo add without any target carries the D14 default-workspace hint") 
     REQUIRE(result.err.find("default/<your-name>/todo") != std::string::npos);
 }
 
-// ---- update / lease / tag（协议 v2 扩展面） --------------------------------
-
-const json kLease = json{{"holder_actor_id", "usr_1"},
-                         {"expires_at", "2026-09-10T01:05:00Z"},
-                         {"renewed_at", "2026-09-10T01:00:00Z"}};
+// ---- update / release / tag（协议 v2 扩展面） --------------------------------
 
 const json kTagPage = json{
     {"items", json::array({json{{"id", "tag_9"}, {"workspace_id", "ws_1"}, {"name", "auth"}}})},
@@ -513,76 +509,29 @@ TEST_CASE("todo update conflict surfaces the REVISION_CONFLICT protocol code") {
     REQUIRE(payload.at("error").at("request_id") == "req_rev");
 }
 
-TEST_CASE("todo lease renew posts bodyless and prints the lease verbatim") {
+TEST_CASE("todo release deletes the claim and confirms with one object") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
+    fx.fake().route("/tasks/task_1/claim", 204, json::object());
 
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
-    REQUIRE(result.exitCode == 0);
-
-    const json payload = json::parse(result.out);
-    REQUIRE(payload == kLease);
-
-    const client::HttpRequest& renew = fx.fake().requests.back();
-    REQUIRE(renew.method == "POST");
-    REQUIRE(renew.url.find("/tasks/task_1/lease/renew") != std::string::npos);
-    REQUIRE(renew.body.empty()); // the endpoint takes no requestBody
-}
-
-TEST_CASE("todo lease renew human output names holder and expiry") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 200, kLease);
-
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1"});
-    REQUIRE(result.exitCode == 0);
-    REQUIRE(result.out.find("Renewed task_1 lease") == 0);
-    REQUIRE(result.out.find("usr_1") != std::string::npos);
-    REQUIRE(result.out.find("2026-09-10T01:05:00Z") != std::string::npos);
-    REQUIRE(result.out.find('\x1b') == std::string::npos);
-}
-
-TEST_CASE("todo lease renew expired surfaces TASK_LEASE_EXPIRED") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease/renew", 409,
-                    json::parse(errorEnvelopeBody("TASK_LEASE_EXPIRED", "lease expired, re-claim",
-                                                  false, "req_lease")));
-
-    const RunResult result = runApp({"astral", "todo", "lease", "renew", "task_1", "--json"});
-    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Conflict));
-
-    const json payload = json::parse(result.out);
-    REQUIRE(payload.at("error").at("code") == "TASK_LEASE_EXPIRED");
-}
-
-TEST_CASE("todo lease release deletes the lease and confirms with one object") {
-    ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease", 204, json::object()); // empty 204 body
-
-    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1", "--json"});
+    const RunResult result = runApp({"astral", "todo", "release", "task_1", "--json"});
     REQUIRE(result.exitCode == 0);
 
     const json payload = json::parse(result.out);
     REQUIRE(payload.at("released") == true);
     REQUIRE(payload.at("task_id") == "task_1");
 
-    const client::HttpRequest& release = fx.fake().requests.back();
-    REQUIRE(release.method == "DELETE");
-    REQUIRE(release.url.find("/tasks/task_1/lease") != std::string::npos);
+    const client::HttpRequest& del = fx.fake().requests.back();
+    REQUIRE(del.method == "DELETE");
+    REQUIRE(del.url.find("/tasks/task_1/claim") != std::string::npos);
 }
 
-TEST_CASE("todo lease release human output prints one confirmation line") {
+TEST_CASE("todo release human output prints one confirmation line") {
     ApiFixture fx;
-    fx.fake().route("/tasks/task_1/lease", 204, json::object());
+    fx.fake().route("/tasks/task_1/claim", 204, json::object());
 
-    const RunResult result = runApp({"astral", "todo", "lease", "release", "task_1"});
+    const RunResult result = runApp({"astral", "todo", "release", "task_1"});
     REQUIRE(result.exitCode == 0);
-    REQUIRE(result.out.find("Released lease on task_1") == 0);
-}
-
-TEST_CASE("todo lease without a subcommand is a usage error") {
-    ApiFixture fx;
-    const RunResult result = runApp({"astral", "todo", "lease"});
-    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+    REQUIRE(result.out.find("Released claim on task_1") == 0);
 }
 
 TEST_CASE("todo tag without a subcommand is a usage error") {
@@ -673,3 +622,281 @@ TEST_CASE("todo tag detach human output names the resolved tag") {
     REQUIRE(result.out.find("Detached auth from task_1") == 0);
 }
 } // namespace
+
+// ---- v2.4 task batch (task-trees / move / batch done) --------------------
+
+TEST_CASE("todo move posts parent_id three-state via PATCH") {
+    ApiFixture fx;
+    json moved = kTaskOne;
+    moved["parent_id"] = "task_2";
+    moved["revision"] = 4;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, moved);    // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Moved task_1 -> task_2") != std::string::npos);
+
+    const client::HttpRequest& patch = fx.fake().requests.back();
+    REQUIRE(patch.method == "PATCH");
+    const json body = json::parse(patch.body);
+    REQUIRE(body.at("parent_id") == "task_2");
+    REQUIRE(body.at("expected_revision") == 3);
+}
+
+TEST_CASE("todo move --to - moves back to the workspace root with null") {
+    ApiFixture fx;
+    json rooted = kTaskOne;
+    rooted["parent_id"] = nullptr;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, rooted);   // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "-"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("workspace root") != std::string::npos);
+
+    const json body = json::parse(fx.fake().requests.back().body);
+    REQUIRE(body.at("parent_id").is_null());
+}
+
+TEST_CASE("todo done with multiple ids batches through batch-update") {
+    ApiFixture fx;
+    json taskB = kTaskOne;
+    taskB["id"] = "task_2";
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read A
+    fx.fake().route("/tasks/task_2", 200, taskB);    // revision read B
+    json batch = json{{"items", json::array({kTaskOne, taskB})}};
+    fx.fake().route("/workspaces/ws_1/tasks/batch-update", 200, batch);
+
+    const RunResult result = runApp({"astral", "todo", "done", "task_1", "task_2", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const json payload = json::parse(result.out);
+    REQUIRE(payload.at("items").size() == 2);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.method == "POST");
+    REQUIRE(post.url.find("/workspaces/ws_1/tasks/batch-update") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("items").size() == 2);
+    REQUIRE(body.at("items").at(0).at("task_id") == "task_1");
+    REQUIRE(body.at("items").at(0).at("expected_revision") == 3);
+    REQUIRE(body.at("set").at("status") == "done");
+}
+
+TEST_CASE("todo done with one id keeps the single PATCH path") {
+    ApiFixture fx;
+    json doneTask = kTaskOne;
+    doneTask["status"] = "done";
+    doneTask["revision"] = 4;
+    fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
+    fx.fake().route("/tasks/task_1", 200, doneTask); // PATCH reply
+
+    const RunResult result = runApp({"astral", "todo", "done", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    const client::HttpRequest& patch = fx.fake().requests.back();
+    REQUIRE(patch.method == "PATCH");
+}
+
+TEST_CASE("todo add-tree posts nested trees with a deterministic idempotency key") {
+    ApiFixture fx;
+    const json treeIn =
+        json{{"trees", json::array({json{{"title", "Epic"},
+                                         {"children", json::array({json{{"title", "Story"}}})}},
+                                    json{{"title", "Solo"}}})}};
+    const json batchOut = json{
+        {"items",
+         json::array({
+             json{
+                 {"task", json{{"id", "tsk_a"}, {"title", "Epic"}}},
+                 {"children", json::array({json{{"task", json{{"id", "tsk_b"}, {"title", "Story"}}},
+                                                {"children", json::array()}}})}},
+             json{{"task", json{{"id", "tsk_c"}, {"title", "Solo"}}}, {"children", json::array()}},
+         })}};
+    fx.fake().route("/workspaces/ws_1/task-trees", 201, batchOut, /*uses=*/2); // 首发 + 幂等重放
+
+    const auto file = fx.workDir() / "tree.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << treeIn.dump();
+    }
+
+    const RunResult result = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Created 3 task(s) in 2 tree(s)") != std::string::npos);
+    REQUIRE(result.out.find("- tsk_a  Epic") != std::string::npos);
+    REQUIRE(result.out.find("    - tsk_b  Story") != std::string::npos);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.method == "POST");
+    REQUIRE(post.url.find("/workspaces/ws_1/task-trees") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("trees").size() == 2);
+    REQUIRE(body.at("trees").at(0).at("children").at(0).at("title") == "Story");
+
+    // Idempotency-Key: present, deterministic prefix, stable across reruns.
+    std::string keyA;
+    for (const auto& h : post.headers) {
+        if (h.first == "Idempotency-Key") {
+            keyA = h.second;
+        }
+    }
+    REQUIRE(keyA.rfind("todo-tree-", 0) == 0);
+
+    const RunResult rerun = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(rerun.exitCode == 0);
+    std::string keyB;
+    for (const auto& h : fx.fake().requests.back().headers) {
+        if (h.first == "Idempotency-Key") {
+            keyB = h.second;
+        }
+    }
+    REQUIRE(keyA == keyB);
+}
+
+TEST_CASE("todo add-tree --parent targets the task container") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_9/task-trees", 201, json{{"items", json::array()}});
+
+    const auto file = fx.workDir() / "sub.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << R"([{"title":"Sub"}])"; // bare array form
+    }
+
+    const RunResult result = runApp(
+        {"astral", "todo", "add-tree", "--file", file.string(), "--parent", "task_9", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.url.find("/tasks/task_9/task-trees") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("trees").at(0).at("title") == "Sub");
+}
+
+TEST_CASE("todo add-tree with malformed input is a usage error without network") {
+    ApiFixture fx;
+    const auto file = fx.workDir() / "bad.json";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << "{not json";
+    }
+    const RunResult result = runApp({"astral", "todo", "add-tree", "--file", file.string()});
+    REQUIRE(result.exitCode == 2);           // Usage
+    REQUIRE(fx.fake().requests.size() == 0); // parse/usage failure precedes any network
+
+    const auto empty = fx.workDir() / "empty.json";
+    {
+        std::ofstream out(empty, std::ios::binary);
+        out << "{\"trees\": []}";
+    }
+    const RunResult emptyRun = runApp({"astral", "todo", "add-tree", "--file", empty.string()});
+    REQUIRE(emptyRun.exitCode == 2);
+}
+
+TEST_CASE("todo add carries a deterministic idempotency key") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/children", 201, kTaskOne);
+
+    const RunResult result = runApp({"astral", "todo", "add", "Fix login flow"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& post = fx.fake().requests.back();
+    std::string key;
+    for (const auto& h : post.headers) {
+        if (h.first == "Idempotency-Key") {
+            key = h.second;
+        }
+    }
+    REQUIRE(key.rfind("todo-", 0) == 0);
+}
+
+// ---- v2.5 task dependencies (todo dep / show / --blocked) -----------------
+
+TEST_CASE("todo dep add posts a blocks edge by default and relates with the flag") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 201,
+                    json{{"from_task_id", "task_1"}, {"to_task_id", "task_2"}, {"kind", "blocks"}});
+
+    const RunResult result = runApp({"astral", "todo", "dep", "add", "task_1", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Blocked task_1 by task_2") != std::string::npos);
+
+    const client::HttpRequest& put = fx.fake().requests.back();
+    REQUIRE(put.method == "PUT");
+    REQUIRE(put.url.find("/tasks/task_1/dependencies/task_2") != std::string::npos);
+    REQUIRE(json::parse(put.body).at("kind") == "blocks");
+
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 201, json{{"kind", "relates"}});
+    const RunResult rel = runApp({"astral", "todo", "dep", "add", "task_1", "task_2", "--relates"});
+    REQUIRE(rel.exitCode == 0);
+    REQUIRE(rel.out.find("Related task_1 <-> task_2") != std::string::npos);
+    REQUIRE(json::parse(fx.fake().requests.back().body).at("kind") == "relates");
+}
+
+TEST_CASE("todo dep remove deletes with the kind query and confirms") {
+    ApiFixture fx;
+    fx.fake().route("/tasks/task_1/dependencies/task_2", 204, json::object());
+
+    const RunResult result = runApp({"astral", "todo", "dep", "remove", "task_1", "task_2"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("Removed blocks edge task_1 -> task_2") != std::string::npos);
+
+    const client::HttpRequest& del = fx.fake().requests.back();
+    REQUIRE(del.method == "DELETE");
+    REQUIRE(del.url.find("kind=blocks") != std::string::npos);
+}
+
+TEST_CASE("todo dep list prints edges both ways and supports --json") {
+    ApiFixture fx;
+    const json list = json{{"items", json::array({
+                                         json{{"from_task_id", "task_1"},
+                                              {"to_task_id", "task_2"},
+                                              {"kind", "blocks"},
+                                              {"created_at", "2026-09-30T00:00:00Z"}},
+                                         json{{"from_task_id", "task_3"},
+                                              {"to_task_id", "task_1"},
+                                              {"kind", "relates"},
+                                              {"created_at", "2026-09-30T00:00:00Z"}},
+                                     })}};
+    fx.fake().route("/tasks/task_1/dependencies", 200, list);
+
+    const RunResult result = runApp({"astral", "todo", "dep", "list", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("task_1 -> task_2  (blocks)") != std::string::npos);
+    REQUIRE(result.out.find("task_3 -> task_1  (relates)") != std::string::npos);
+
+    fx.fake().route("/tasks/task_1/dependencies", 200, list);
+    const RunResult asJson = runApp({"astral", "todo", "dep", "list", "task_1", "--json"});
+    REQUIRE(asJson.exitCode == 0);
+    REQUIRE(json::parse(asJson.out).at("items").size() == 2);
+}
+
+TEST_CASE("todo show renders dependency view fields") {
+    ApiFixture fx;
+    json detailed = kTaskOne;
+    detailed["blocked_by"] = json::array({"task_9"});
+    detailed["blocks"] = json::array();
+    detailed["related"] = json::array({"task_7", "task_8"});
+    fx.fake().route("/tasks/task_1", 200, detailed);
+
+    const RunResult result = runApp({"astral", "todo", "show", "task_1"});
+    REQUIRE(result.exitCode == 0);
+    REQUIRE(result.out.find("blocked_by:") != std::string::npos);
+    REQUIRE(result.out.find("task_9") != std::string::npos);
+    REQUIRE(result.out.find("related:") != std::string::npos);
+    REQUIRE(result.out.find("task_7, task_8") != std::string::npos);
+}
+
+TEST_CASE("todo list forwards blocked filters as query parameters") {
+    ApiFixture fx;
+    fx.fake().route("/workspaces/ws_1/children", 200, kTaskPage);
+
+    const RunResult result =
+        runApp({"astral", "todo", "list", "--blocked", "--blocked-by", "task_2", "--json"});
+    REQUIRE(result.exitCode == 0);
+
+    const client::HttpRequest& req = fx.fake().requests.back();
+    REQUIRE(req.url.find("blocked=true") != std::string::npos);
+    REQUIRE(req.url.find("blocked_by=task_2") != std::string::npos);
+}

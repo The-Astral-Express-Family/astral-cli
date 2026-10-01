@@ -28,6 +28,7 @@ enum class Errc {
     Usage,                 // USAGE (bad input that CLI11 alone can't express)
     RegistrationRejected,  // REGISTRATION_REJECTED (server refused the signup)
     Internal,              // INTERNAL
+    UpdateIntegrity,       // UPDATE_INTEGRITY
 };
 
 class AstralError : public std::runtime_error {

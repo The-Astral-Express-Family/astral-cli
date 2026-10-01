@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 
 #include <cstdlib>
+#include <fstream>
 #include <mutex>
 
 #include "core/error.hpp"
@@ -106,6 +107,11 @@ public:
 
     CURL* handle() { return handle_; }
 
+    // Options 级额外头在 handle 构造后追加（见 send/getToFile）。
+    void appendHeader(const std::string& line) {
+        headerList_ = curl_slist_append(headerList_, line.c_str());
+    }
+
 private:
     CURL* handle_ = nullptr;
     struct curl_slist* headerList_ = nullptr;
@@ -153,6 +159,16 @@ HttpClient::~HttpClient() = default;
 HttpResponse HttpClient::send(const HttpRequest& request) {
     PreparedRequest prepared(request, options_, "Accept: application/json");
     CURL* handle = prepared.handle();
+
+    // NOTE: 刻意不设置任何 CURLOPT_PROXY*——libcurl 默认识别标准代理环境
+    // 变量（HTTP_PROXY/HTTPS_PROXY/NO_PROXY/ALL_PROXY，含小写变体）。
+    if (options_.followRedirects) {
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
+    }
+    for (const auto& [name, value] : options_.headers) {
+        prepared.appendHeader(name + ": " + value);
+    }
 
     HttpResponse response;
     curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS,
@@ -260,6 +276,72 @@ HttpResponse HttpClient::sendStreaming(const HttpRequest& request, const ChunkSi
     }
     if (response.status != 200) {
         response.body = std::move(context.errorBody);
+    }
+    return response;
+}
+
+namespace {
+
+// 流式写文件回调：写失败时返回短计数，curl 以 CURLE_WRITE_ERROR 中止，
+// 在 throwCurlFailure 里映射为 NETWORK_ERROR。
+std::size_t writeToFile(char* data, std::size_t size, std::size_t count, void* userData) {
+    auto* file = static_cast<std::ofstream*>(userData);
+    file->write(data, static_cast<std::streamsize>(size * count));
+    return file->good() ? size * count : 0;
+}
+
+} // namespace
+
+HttpResponse HttpClient::getToFile(const std::string& url,
+                                   const std::filesystem::path& destination) {
+    HttpRequest request;
+    request.method = "GET";
+    request.url = url;
+
+    // URL 校验（含 "://" 检查）在打开目标文件之前完成，坏 URL 不会留下空文件。
+    PreparedRequest prepared(request, options_, "Accept: application/octet-stream");
+    CURL* handle = prepared.handle();
+
+    std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        throw core::AstralError(core::Errc::LocalWorkspaceError,
+                                "cannot open download destination " + destination.string());
+    }
+    const auto removePartial = [&destination] {
+        std::error_code ignored;
+        std::filesystem::remove(destination, ignored);
+    };
+
+    if (options_.followRedirects) {
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
+    }
+    for (const auto& [name, value] : options_.headers) {
+        prepared.appendHeader(name + ": " + value);
+    }
+
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS,
+                     static_cast<long>(options_.requestTimeout.count()));
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, writeToFile);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &file);
+    curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, collectHeader);
+    // 头部无需收集，但保留回调避免默认行为改变。
+    std::vector<std::pair<std::string, std::string>> ignoredHeaders;
+    curl_easy_setopt(handle, CURLOPT_HEADERDATA, &ignoredHeaders);
+
+    const CURLcode result = curl_easy_perform(handle);
+    HttpResponse response;
+    curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.status);
+    if (result != CURLE_OK) {
+        file.close();
+        removePartial();
+        throwCurlFailure(result, request.url);
+    }
+    file.close();
+    if (response.status >= 400) {
+        removePartial();
+        throw core::AstralError(core::Errc::NetworkError,
+                                "HTTP " + std::to_string(response.status) + " downloading " + url);
     }
     return response;
 }

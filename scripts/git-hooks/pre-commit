@@ -1,0 +1,30 @@
+#!/bin/sh
+# pre-commit hook: clang-format gate on staged C++ sources.
+# Mirrors the CI clang-format job (clang-format --dry-run --Werror) so format
+# violations die at commit time instead of reddening CI an hour later.
+# Runs on Linux/macOS/Windows (Git for Windows bundles sh).
+
+set -eu
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root"
+
+# staged .cpp/.hpp/.hpp.in files only (CI 的 diff 过滤在服务端，这里用暂存区)
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.cpp' '*.hpp' '*.hpp.in' || true)
+[ -z "$files" ] && exit 0
+
+if ! command -v clang-format >/dev/null 2>&1; then
+    echo "pre-commit: clang-format not found — SKIPPING format gate" >&2
+    echo "  (CI 仍会检查；请安装 clang-format 让本地先拦住)" >&2
+    exit 0
+fi
+
+# shellcheck disable=SC2086
+if ! clang-format --dry-run --Werror $files >/dev/null 2>/tmp/astral-fmt-check.log; then
+    echo "pre-commit: clang-format violations in staged files:" >&2
+    sed 's/^/  /' /tmp/astral-fmt-check.log >&2 || true
+    echo "" >&2
+    echo "fix: clang-format -i <files> && git add <files>" >&2
+    exit 1
+fi
+
+exit 0

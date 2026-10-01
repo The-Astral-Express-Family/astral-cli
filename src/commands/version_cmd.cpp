@@ -2,8 +2,6 @@
 
 #include <ostream>
 
-#include <nlohmann/json.hpp>
-
 #include "core/version.hpp"
 #include "output/json_output.hpp"
 
@@ -23,7 +21,8 @@ public:
             output::printJson(context.out, core::identityFields(/*withName=*/true));
             return 0;
         }
-        context.out << core::identityString() << "\n";
+        context.out << "astral " << core::versionString() << " (" << core::kGitDescribe << ", "
+                    << core::buildPlatform() << ", protocol " << core::kProtocolVersion << ")\n";
         return 0;
     }
 };

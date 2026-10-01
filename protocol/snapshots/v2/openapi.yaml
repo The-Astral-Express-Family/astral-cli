@@ -12,7 +12,7 @@
 openapi: 3.1.0
 info:
   title: Astral Modulator Public API
-  version: 2.0.0-scaffold
+  version: 2.4.0
   license:
     name: MIT
     identifier: MIT
@@ -23,6 +23,25 @@ info:
     统一为 GET/POST <container>/children；全量平铺列表与 /tasks/search 已移除，
     平面查询走 /workspaces/{id}/task-search。protocol_version 升为 2，
     与 v1 不兼容（破坏性变更，开发期不做兼容窗口）。
+
+    2.1（任务批量管理，TODO.md §9 2026-09-30）：capabilities features 增
+    `task_batch`——批量树形创建（POST <container>/task-trees，嵌套子树一次
+    投递）、批量移动（POST /workspaces/{id}/tasks/move）、批量同值更新
+    （POST /workspaces/{id}/tasks/batch-update）。三个批量端点均为整批单事务
+    全有或全无语义；删除仍不做（T1：取消走 status=cancelled）。
+
+    2.2（任务依赖，TODO.md §9 2026-09-30）：capabilities features 增
+    `task_dependencies`——任务依赖边（blocks / relates 两种语义），Task 对象
+    恒填充 blocked_by / blocks / related 视图字段；管理端点
+    GET/PUT/DELETE /tasks/{id}/dependencies；children 与 task-search 支持
+    blocked / blocked_by 过滤。依赖目前只做表达/展示/过滤，不拦截
+    claim/done。注：与并行的兄弟排序变更同轮开发，info.version 以先合入者
+    为 2.2，后合入者顺延。
+
+    2.4（兄弟排序，TODO.md §9 2026-09-30）：Task 增 position（兄弟排序键），
+    children 集合按 position 升序返回（cursor 同步换为 position 键集分页）；
+    move 端点 items 增可选 position——同一次调用完成换父与兄弟内排序
+    （拖拽重排的基础）。老数据回填 = 创建正序，此后创建一律追加兄弟尾部。
 
     已裁决的文档分歧（详见 TODO.md「文档分歧裁决」D1-D4）：
     - Device flow 采用 `/auth/device/authorizations*` 路径。
@@ -511,6 +530,8 @@ paths:
       tags: [tasks]
       summary: 创建根层任务（投递进 workspace 容器；支持 Idempotency-Key）
       operationId: createRootTask
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
@@ -528,11 +549,15 @@ paths:
       summary: |
         workspace 容器的子任务集合 = 根层任务（parent_id 为空），仅此一层。
         子层用 GET /tasks/{task_id}/children 逐容器下钻（D15：不做全量平铺）。
+        集合按兄弟排序键 position 升序返回（2.2；cursor 为 position 键集分页，
+        对客户端不透明）。
       operationId: listWorkspaceChildren
       parameters:
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -550,6 +575,8 @@ paths:
       tags: [tasks]
       summary: 创建子任务（投递进 task 容器；支持 Idempotency-Key）
       operationId: createChildTask
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
         required: true
         content:
@@ -570,6 +597,8 @@ paths:
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -580,6 +609,54 @@ paths:
               schema:
                 $ref: "#/components/schemas/TaskPage"
         "404": { $ref: "#/components/responses/Error" }
+
+  /workspaces/{workspace_id}/task-trees:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [tasks]
+      summary: 批量创建根层任务树（嵌套子树一次投递；全有或全无）
+      operationId: createTaskTrees
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskTreeBatch" }
+      responses:
+        "201":
+          description: |
+            整批创建成功（单事务；任一节点非法则整批不创建）。items 与请求
+            trees 一一对应并镜像嵌套结构，task 内含服务端生成的 id/revision。
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskTreeBatchCreated" }
+        "400": { $ref: "#/components/responses/Error" }   # 超 nodes/深度上限、title/priority 非法
+        "404": { $ref: "#/components/responses/Error" }   # tags 含未知名字
+
+  /tasks/{task_id}/task-trees:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+    post:
+      tags: [tasks]
+      summary: 批量创建子任务树（投递进 task 容器；语义与 workspace 版一致）
+      operationId: createChildTaskTrees
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskTreeBatch" }
+      responses:
+        "201":
+          description: 整批创建成功（全部新任务 parent=容器任务）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskTreeBatchCreated" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }   # 容器任务不存在 / tags 含未知名字
 
   /workspaces/{workspace_id}/task-search:
     get:
@@ -598,6 +675,8 @@ paths:
         - { $ref: "#/components/parameters/TaskTagFilter" }
         - { $ref: "#/components/parameters/TaskStatusFilter" }
         - { $ref: "#/components/parameters/TaskAssigneeFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedFilter" }
+        - { $ref: "#/components/parameters/TaskBlockedByFilter" }
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
       responses:
@@ -608,6 +687,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/TaskSearchPage"
         "400": { $ref: "#/components/responses/Error" }   # 零条件 / 非法 regex / 超长输入
+
+  /workspaces/{workspace_id}/tasks/move:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [tasks]
+      summary: 批量移动任务到新父并/或调整兄弟序位（全有或全无；子孙随 parent 语义自然跟随）
+      operationId: moveTasks
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskMoveBatch" }
+      responses:
+        "200":
+          description: |
+            整批移动成功（单事务）。items 按请求顺序返回移动后的任务全量。
+            语义：parent_id=null 移到根层；不支持跨 workspace；移动任务到
+            自己的子孙下成环 → 400 整批不生效（批内互移参与统一环检测）；
+            可选 position 同时指定目标兄弟序位（2.2，同父移动 = 重排），
+            缺省追加末尾。
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskBatchResult" }
+        "400": { $ref: "#/components/responses/Error" }   # 环/自挂/跨 ws/重复 task_id/超批上限
+        "404": { $ref: "#/components/responses/Error" }   # TASK_NOT_FOUND（含不属于该 workspace 的 task_id）
+        "409": { $ref: "#/components/responses/Error" }   # REVISION_CONFLICT，details 带 task_id + 当前 revision
+
+  /workspaces/{workspace_id}/tasks/batch-update:
+    parameters:
+      - { $ref: "#/components/parameters/WorkspaceId" }
+    post:
+      tags: [tasks]
+      summary: 批量更新任务的同一字段值（全有或全无；如批量完成/批量取消/批量指派）
+      operationId: batchUpdateTasks
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskBatchUpdate" }
+      responses:
+        "200":
+          description: 整批更新成功（单事务）。items 按请求顺序返回更新后的任务全量。
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskBatchResult" }
+        "400": { $ref: "#/components/responses/Error" }   # set 为空 / status、priority 非法 / 超批上限
+        "404": { $ref: "#/components/responses/Error" }   # TASK_NOT_FOUND
+        "409": { $ref: "#/components/responses/Error" }   # REVISION_CONFLICT
 
   /tasks/{task_id}:
     parameters:
@@ -640,10 +772,78 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "409": { $ref: "#/components/responses/Error" }   # REVISION_CONFLICT，details 带当前 revision
 
+  /tasks/{task_id}/dependencies:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+    get:
+      tags: [tasks]
+      summary: 任务依赖边列表（双向：作为依赖方与作为 blocker 的全部边）
+      operationId: listTaskDependencies
+      responses:
+        "200":
+          description: 依赖边全量（边数有界，单任务每方向上限 50，不分页）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyList" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /tasks/{task_id}/dependencies/{dependency_task_id}:
+    parameters:
+      - { $ref: "#/components/parameters/TaskId" }
+      - name: dependency_task_id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Id" }
+        description: 被依赖方（blocker）；必须与 task_id 同 workspace
+    put:
+      tags: [tasks]
+      summary: |
+        增加依赖边（task_id 依赖 dependency_task_id；body.kind 缺省 blocks）。
+        blocks 边写入时沿依赖链防环；同边已存在则幂等 200 不 bump。
+        边变更两端任务各 revision+1 并发 task.updated（data.dep_change）。
+      operationId: addTaskDependency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum: [blocks, relates]
+                  default: blocks
+                  description: blocks = 硬阻塞（防环校验）；relates = 对称关联
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyEdge" }
+        "200":
+          description: 边已存在（幂等，不 bump）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DependencyEdge" }
+        "400": { $ref: "#/components/responses/Error" }   # 自依赖/环/跨 ws/kind 非法/超上限
+        "404": { $ref: "#/components/responses/Error" }   # 任务不存在（含跨 ws）
+    delete:
+      tags: [tasks]
+      summary: 删除依赖边（?kind= 缺省 blocks；边不存在幂等 204）
+      operationId: removeTaskDependency
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string, enum: [blocks, relates], default: blocks }
+      responses:
+        "204": { description: 已删除（或边本不存在） }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /tasks/{task_id}/claim:
     post:
       tags: [tasks]
-      summary: 原子认领（Phase 1 spike 验收核心）
+      summary: 原子认领（认领持有至释放或任务完成，无时间自动过期）
       operationId: claimTask
       parameters:
         - { $ref: "#/components/parameters/TaskId" }
@@ -656,39 +856,21 @@ paths:
               required: [expected_revision]
               properties:
                 expected_revision: { type: integer, format: int64, minimum: 1 }
-                lease_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
       responses:
         "200":
-          description: 认领成功
+          description: 认领成功（assignee 指派为自己 + status 转 in_progress）
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ClaimResult" }
         "409": { $ref: "#/components/responses/Error" }   # TASK_ALREADY_CLAIMED / REVISION_CONFLICT
-
-  /tasks/{task_id}/lease/renew:
-    post:
-      tags: [tasks]
-      summary: 续租（仅 holder）
-      operationId: renewLease
-      parameters:
-        - { $ref: "#/components/parameters/TaskId" }
-      responses:
-        "200":
-          description: 已续租
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Lease" }
-        "409": { $ref: "#/components/responses/Error" }   # TASK_LEASE_EXPIRED 需重新 claim
-
-  /tasks/{task_id}/lease:
     delete:
       tags: [tasks]
-      summary: 释放（holder；human force release 走 override/approval）
-      operationId: releaseLease
+      summary: 释放认领（claimant 本人；他人需 task:override 强制释放）
+      operationId: releaseClaim
       parameters:
         - { $ref: "#/components/parameters/TaskId" }
       responses:
-        "204": { description: 已释放 }
+        "204": { description: 已释放（未认领时幂等 204） }
 
   /workspaces/{workspace_id}/tags:
     get:
@@ -1466,6 +1648,18 @@ components:
       name: assignee
       in: query
       schema: { type: string }
+    TaskBlockedFilter:
+      name: blocked
+      in: query
+      schema: { type: boolean, default: false }
+      description: |
+        仅返回存在未完成 blocks 依赖的任务（2.2）：依赖对端 status != done
+        即视为阻塞中（cancelled 不算完成，T1 下它是可复活状态）。
+    TaskBlockedByFilter:
+      name: blocked_by
+      in: query
+      schema: { type: string }
+      description: 仅返回被指定任务阻塞（存在 blocks 边指向该任务）的任务（2.2）。
     TaskRegexFilter:
       name: regex
       in: query
@@ -1474,6 +1668,14 @@ components:
       name: fuzzy
       in: query
       schema: { type: string, maxLength: 256 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, maxLength: 128 }
+      description: |
+        幂等键（可选）：同一 Actor+端点+键在 24h 窗口内重放返回首次 2xx 响应
+        （docs/protocol.md §4；4xx/5xx 不入缓存）。批量端点整批共用一个键，
+        建议由内容确定性派生，使网络重试安全（不会重复建树/重复移动）。
 
   responses:
     Error:
@@ -1516,11 +1718,6 @@ components:
       type: [string, "null"]
       format: date-time
 
-    LeaseOrNull:
-      oneOf:
-        - $ref: "#/components/schemas/Lease"
-        - type: "null"
-
     ErrorCode:
       type: string
       enum:
@@ -1534,7 +1731,6 @@ components:
         - WORKSPACE_NAME_TAKEN
         - TASK_NOT_FOUND
         - TASK_ALREADY_CLAIMED
-        - TASK_LEASE_EXPIRED
         - TAG_PROPOSAL_EXPIRED
         - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
         - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期/类型不符统一此码（防探测，400）
@@ -1588,7 +1784,7 @@ components:
         features:
           type: array
           items: { type: string }
-          description: 功能开关名（如 task_lease/document_sync_v1/sse_resume）；未列出即不可用
+          description: 功能开关名（如 task_claim/document_sync/task_batch）；未列出即不可用
 
     DeviceAuthorization:
       type: object
@@ -1881,7 +2077,8 @@ components:
     Task:
       type: object
       required: [id, workspace_id, title, description, status, priority, parent_id,
-        assignee_actor_id, revision, tags, children_count, created_at, updated_at]
+        assignee_actor_id, revision, tags, children_count, blocked_by, blocks,
+        related, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/Id" }
         workspace_id: { $ref: "#/components/schemas/Id" }
@@ -1892,6 +2089,13 @@ components:
         priority: { $ref: "#/components/schemas/TaskPriority" }
         assignee_actor_id: { $ref: "#/components/schemas/IdOrNull" }
         revision: { type: integer, format: int64 }
+        position:
+          type: integer
+          format: int64
+          description: |
+            兄弟排序键（2.2）：同一父容器子层内 0 起的序位，children 集合按
+            position 升序（同位 id 降序兜底）返回。创建=追加兄弟尾部；调整
+            走 move 端点的可选 position。恒填充。
         tags:
           type: array
           items: { $ref: "#/components/schemas/Tag" }
@@ -1900,24 +2104,158 @@ components:
           type: integer
           format: int64
           description: 直接子任务数（UI 展开徽标；恒填充）
-        lease: { $ref: "#/components/schemas/LeaseOrNull" }
+        blocked_by:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 本任务依赖（等待）的任务 id 列表（2.2；blocks 边出向；恒填充）
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 依赖本任务（被本任务阻塞）的任务 id 列表（2.2；blocks 边入向；恒填充）
+        related:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: 与本任务关联（relates 边）的任务 id 列表（2.2；恒填充）
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
-    Lease:
+    DependencyEdge:
       type: object
-      required: [holder_actor_id, expires_at]
+      required: [from_task_id, to_task_id, kind, created_at]
       properties:
-        holder_actor_id: { $ref: "#/components/schemas/Id" }
-        expires_at: { type: string, format: date-time }
-        renewed_at: { type: string, format: date-time }
+        from_task_id: { $ref: "#/components/schemas/Id" }
+        to_task_id: { $ref: "#/components/schemas/Id" }
+        kind:
+          type: string
+          enum: [blocks, relates]
+          description: from 依赖 to（blocks = to 完成前 from 处于阻塞语义）
+        created_at: { type: string, format: date-time }
+
+    DependencyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyEdge" }
+
+    TaskTreeNode:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 500 }
+        description: { type: string, default: "" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        tags:
+          type: array
+          items: { type: string }
+          description: 同 TaskCreate.tags（已存在 tag 规范化名；任一未知 → 404 整批不创建）
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/TaskTreeNode" }
+
+    TaskTreeBatch:
+      type: object
+      required: [trees]
+      properties:
+        trees:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/TaskTreeNode" }
+          description: |
+            一次投递的根树集合。整批（含全部嵌套 children）总节点数 ≤200、
+            嵌套深度 ≤8，超限 400 VALIDATION_FAILED（上限计数按节点，长度
+            校验按 UTF-8 字节口径，TODO.md §1.2 L1）。整批单事务、全有或
+            全无：任一节点非法则整批不创建。
+
+    TaskTreeNodeCreated:
+      type: object
+      required: [task, children]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/TaskTreeNodeCreated" }
+          description: 与请求 children 一一对应（无子任务时空数组）
+
+    TaskTreeBatchCreated:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TaskTreeNodeCreated" }
+          description: 与请求 trees 一一对应，镜像嵌套结构
+
+    TaskMoveItem:
+      type: object
+      required: [task_id, parent_id, expected_revision]
+      properties:
+        task_id: { $ref: "#/components/schemas/Id" }
+        parent_id:
+          $ref: "#/components/schemas/IdOrNull"
+          description: null = 移到根层；Id = 挂到该任务下（可为批内任务）
+        expected_revision: { type: integer, format: int64, minimum: 1 }
+        position:
+          type: integer
+          minimum: 0
+          description: |
+            目标父容器子层中的 0 起下标（2.2）：任务插入到摘除前列表中该下标
+            当前元素之前，越界收敛到末尾；缺省 = 追加到末尾。同父移动先从原位
+            摘除再插入（position 以摘除前的兄弟列表为准）。items 按请求顺序
+            生效，后项的 position 相对其处理前的目标列表状态。负数 400。
+
+    TaskMoveBatch:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/TaskMoveItem" }
+          description: task_id 不得重复；不支持跨 workspace（否则 404/400）
+
+    TaskBatchUpdateItem:
+      type: object
+      required: [task_id, expected_revision]
+      properties:
+        task_id: { $ref: "#/components/schemas/Id" }
+        expected_revision: { type: integer, format: int64, minimum: 1 }
+
+    TaskBatchUpdate:
+      type: object
+      required: [items, set]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/TaskBatchUpdateItem" }
+          description: task_id 不得重复
+        set:
+          type: object
+          description: 应用于选中集合的同一字段值；至少提供一项，否则 400
+          properties:
+            status: { $ref: "#/components/schemas/TaskStatus" }
+            priority: { $ref: "#/components/schemas/TaskPriority" }
+            assignee_actor_id: { $ref: "#/components/schemas/IdOrNull" }
+
+    TaskBatchResult:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+          description: 按请求 items 顺序返回变更后的任务全量
 
     ClaimResult:
       type: object
-      required: [task, lease]
+      required: [task]
       properties:
         task: { $ref: "#/components/schemas/Task" }
-        lease: { $ref: "#/components/schemas/Lease" }
 
     Tag:
       type: object

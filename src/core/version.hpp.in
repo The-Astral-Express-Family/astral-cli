@@ -8,6 +8,7 @@ namespace astral::core {
 
 inline constexpr const char* kProjectName = "astral";
 inline constexpr const char* kProjectVersion = "@PROJECT_VERSION@";
+inline constexpr const char* kEmbedVersion = "@ASTRAL_EMBED_VERSION@";
 inline constexpr const char* kGitDescribe = "@ASTRAL_GIT_DESCRIBE@";
 
 // Protocol version this CLI speaks; see ARCHITECTURE.md section 5.
@@ -18,6 +19,8 @@ const char* buildPlatform();
 // CLI 身份信息的单一来源：version/doctor 命令与 --version 回退共用，
 // 字段增改只改 version.cpp 一处（此前三处手拼，git 字段已经漂移丢失过）。
 // 人类可读单行："astral <version> (<git>, <platform>, protocol <N>)"。
+const char* versionString();
+
 std::string identityString();
 // JSON 身份字段：{name?, version, git, platform, protocolVersion}。
 nlohmann::json identityFields(bool withName);

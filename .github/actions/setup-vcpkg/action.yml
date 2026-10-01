@@ -1,8 +1,24 @@
 name: Set up vcpkg
 description: Clone vcpkg at the manifest's builtin-baseline and export VCPKG_ROOT.
+inputs:
+  # vcpkg 的包归档按 (triplet, ABI) 键控：triplet 必须参与缓存主键。
+  # 否则切换 triplet（如 dynamic → x64-windows-static）后主键不变，每次都
+  # 精确命中旧 triplet 的归档（对当前构建全部 ABI miss）触发全量源码重编，
+  # 且新归档保存时因主键已存在被 actions/cache 静默跳过 → 永久冷跑。
+  triplet:
+    description: 'VCPKG_TARGET_TRIPLET of the consuming build (empty = host default)'
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
+    # 托管镜像月度更新会升级 MSVC 工具链并整体改变包 ABI；入键后工具链升级
+    # 只触发一次冷重建并成功存档，而不是命中旧归档 + 保存被跳过的永久冷态。
+    - name: Fingerprint runner image
+      id: image
+      shell: bash
+      run: echo "version=${ImageVersion:-none}" >> "$GITHUB_OUTPUT"
+
     - name: Cache vcpkg binary archives
       uses: actions/cache@v4
       with:
@@ -10,9 +26,19 @@ runs:
           ~/.cache/vcpkg/archives
           ~/Library/Caches/vcpkg/archives
           ~/AppData/Local/vcpkg/archives
-        key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json') }}
+        key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ steps.image.outputs.version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
         restore-keys: |
-          vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-
+          vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ steps.image.outputs.version }}-
+
+    # vcpkg 本体（ports 树约几十 MB）：清单未变时省掉对 baseline 的深度 fetch。
+    # 仍然无条件 bootstrap：vcpkg 工具版本要跟随仓库当前状态，不做漂移。
+    - name: Cache vcpkg clone
+      uses: actions/cache@v4
+      with:
+        path: ~/vcpkg-clone
+        key: vcpkg-clone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+        restore-keys: |
+          vcpkg-clone-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Clone and bootstrap (posix)
       if: runner.os != 'Windows'

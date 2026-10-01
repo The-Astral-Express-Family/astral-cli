@@ -9,8 +9,25 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    name: Tag matches project version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches project version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          # project(VERSION) 只接受纯数字 X.Y.Z；tag 可额外携带 prerelease 后缀
+          # （-rc.1 等），比对时只核对数字核心，后缀会完整烙入二进制。
+          TAG_CORE="${TAG%%-*}"
+          PROJ="$(grep -m1 -oP 'VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)"
+          [ "$TAG_CORE" = "$PROJ" ] || { echo "::error::tag v$TAG (core $TAG_CORE) != project VERSION $PROJ; bump CMakeLists.txt first"; exit 1; }
+
   build:
     name: Build ${{ matrix.target }}
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -21,7 +38,7 @@ jobs:
           - { os: macos-latest, target: macos-arm64, archive: tar.gz }
           # macos-13（Intel/x64）已随 ci.yml 移除：排队满 24h 必被取消，
           # release 流水线会同样卡死。Intel 包待 osxcross 交叉编译方案。
-          - { os: windows-2022, target: windows-x64, archive: zip }
+          - { os: windows-2022, target: windows-x64, archive: zip, triplet: x64-windows-static }
     env:
       ASTRAL_TARGET: ${{ matrix.target }}
     steps:
@@ -33,11 +50,24 @@ jobs:
 
       - name: Set up vcpkg
         uses: ./.github/actions/setup-vcpkg
+        with:
+          # 进二进制缓存键（见 action 内注释）；与 ci.yml 同 triplet，两
+          # 条流水线共享同一份包归档缓存。
+          triplet: ${{ matrix.triplet }}
 
       - name: Configure, build, test
         shell: bash
         run: |
-          cmake --preset ci
+          # Tag builds embed the release tag; workflow_dispatch keeps the default v$PROJECT_VERSION.
+          flags=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            flags="-DASTRAL_EMBED_VERSION=${GITHUB_REF_NAME}"
+          fi
+          # 静态 triplet（与 ci.yml 同源决策）：发行物单 exe 自包含。
+          if [ -n "${{ matrix.triplet }}" ]; then
+            flags="$flags -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"
+          fi
+          cmake --preset ci $flags
           cmake --build --preset ci
           ctest --preset ci
 
@@ -47,6 +77,16 @@ jobs:
           build/ci/astral version
           build/ci/astral doctor --json
           out=$(build/ci/astral version --json); echo "$out" | grep -q '"name":"astral"'
+          # 首个 tag 发布前 /releases/latest 尚为 404（exit 4 + 明确消息），
+          # 这是合法终态；之后的发版才要求命中 "latest" 键。
+          if build/ci/astral update --check --json > /tmp/update-check.json 2>&1; then
+            grep -F '"latest"' /tmp/update-check.json
+          else
+            grep -F 'no releases published' /tmp/update-check.json
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            build/ci/astral version | grep -F "${GITHUB_REF_NAME}"
+          fi
 
       - name: Package (posix)
         if: matrix.archive == 'tar.gz'
@@ -54,10 +94,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="astral-${version}-${ASTRAL_TARGET}"
-          mkdir -p "dist/${name}"
-          cp build/ci/astral "dist/${name}/"
-          cp LICENSE README.md "dist/${name}/"
-          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          mkdir -p "staging/${name}" dist
+          cp build/ci/astral "staging/${name}/"
+          cp LICENSE README.md "staging/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C staging "${name}"
 
       - name: Package (windows)
         if: matrix.archive == 'zip'
@@ -65,10 +105,32 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $name = "astral-$version-$env:ASTRAL_TARGET"
-          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item build/ci/astral.exe "dist/$name/"
-          Copy-Item LICENSE, README.md "dist/$name/"
-          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          New-Item -ItemType Directory -Force "staging/$name" | Out-Null
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/ci/astral.exe "staging/$name/"
+          Copy-Item LICENSE, README.md "staging/$name/"
+          Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
+
+      - name: Packaged smoke (extract from archive, run)
+        shell: bash
+        run: |
+          # 防回归关键步：从发行 archive 解包运行（而非构建树）——构建树旁有
+          # vcpkg 拷贝的 DLL 时动态产物也能跑，正是 alpha.1~5 坏包漏网的缝隙。
+          # Windows 的 tar 是 bsdtar，可直接解 zip。
+          version="${GITHUB_REF_NAME#v}"
+          name="astral-${version}-${ASTRAL_TARGET}"
+          rm -rf verify && mkdir verify
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            tar -xzf "dist/${name}.tar.gz" -C verify
+          else
+            # shell: bash 的 PATH 先命中 Git 自带 GNU tar，读不了 zip；
+            # 只有 Windows 系统自带的 bsdtar 支持，显式走 System32。
+            "$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -xf "dist/${name}.zip" -C verify
+          fi
+          bin="verify/${name}/astral"
+          [ "${{ matrix.archive }}" = "zip" ] && bin="verify/${name}/astral.exe"
+          "$bin" version
+          "$bin" version --json | grep -F '"name":"astral"'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -98,8 +160,9 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+        # scripts/install.sh and scripts/install.ps1 are provided by tasks 10/11.
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt scripts/install.sh scripts/install.ps1 \
             --title "astral ${GITHUB_REF_NAME}" \
             --generate-notes \
             --verify-tag

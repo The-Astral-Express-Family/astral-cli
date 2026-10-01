@@ -453,9 +453,11 @@ astral init https://astral.example.com/todo --create  # 不存在则创建
 ```text
 astral todo list
 astral todo add "..." --parent <task-id>
+astral todo add-tree --file plan.json [--parent <task-id>]
 astral todo show <task-id>
 astral todo claim <task-id>
-astral todo done <task-id>
+astral todo done <task-id> [task-id ...]
+astral todo move <task-id> --to <parent-task-id|->
 astral todo search --regex <expr> --fuzzy <text>
 ```
 
@@ -472,10 +474,29 @@ workspace 根层，`--parent <task-id>` 切到该任务的 children 集合（只
 走 `/workspaces/{id}/task-search` 平面查询，regex/fuzzy 与
 tag/status/assignee 平权（至少一个条件）。
 
+批量管理（2026-09-30，协议快照 v2.4 / 服务端 task_batch）：`todo add-tree`
+读嵌套 JSON（`{"trees":[...]}` 或裸数组，`--file -` 走 stdin）一次投递整批
+任务树（服务端整批单事务全有或全无；幂等键 = 内容 hash，重跑同文件不双建）；
+`todo done` 传多个 id 时走 `batch-update` 整批完成（逐 id 预读 revision，
+单个 id 保持既有 PATCH 路径）；`todo move --to -` 即 `parent_id: null`
+移回根层。`add`/`add-tree` 均携带确定性 Idempotency-Key（内容派生，
+与 msg/document 同纪律）。
+
+依赖边（2026-09-30，协议快照 v2.5 / 服务端 task_dependencies）：
+`todo dep add <task_id> <on_task_id>` 建立「前者依赖后者」（缺省 blocks
+硬阻塞，`--relates` 对称关联）；`todo dep remove` 删边（`?kind=` 缺省
+blocks，幂等）；`todo dep list <task_id>` 双向列边。`todo show` 渲染
+blocked_by/blocks/related 视图字段；`todo list`/`todo search` 支持
+`--blocked`（存在未完成依赖）与 `--blocked-by <id>` 过滤。依赖目前不拦截
+claim/done（服务端裁决：只表达/展示/过滤）。
+
 `claim`/`done` 的乐观并发（round 14 实装语义）：不传 `--revision` 时 CLI 先
 GET 任务当前 revision 再提交（读改写窗口由服务端 409
 `REVISION_CONFLICT`/`TASK_ALREADY_CLAIMED` 兜底）；传 `--revision` 则跳过
-读取、原样提交。`list`/`search` 分页：默认单页，`--all` 跟随
+读取、原样提交。**2.3 租约拆除**（协议快照 v2.6，与 astral-modulator PR #10
+两仓锁定同步）：认领无时间维度（持有至 release），`todo lease renew/release`
+移除、`--lease-seconds` 移除，释放改 `todo release <task_id>`
+（DELETE /tasks/{id}/claim，claimant 或 task:override，幂等 204）。`list`/`search` 分页：默认单页，`--all` 跟随
 `next_cursor` 取尽；`--json` 输出单对象（含 `items` 与最终
 `next_cursor`），非流式 JSON Lines。目标解析（server/workspace）遵循
 第 10 节优先级；鉴权遵循 §6.3：`ASTRAL_TOKEN` 优先，否则 human 会话槽 +
@@ -549,6 +570,7 @@ EMAIL_TAKEN / bootstrap 关闭 / VALIDATION_FAILED / 429）恒 exit 1 +
 7 timeout
 8 local workspace error
 9 incompatible protocol/client
+10 update/supply-chain integrity failure
 ```
 
 ## 13. HTTP/SSE Client
@@ -634,7 +656,8 @@ Idempotency-Key（msg send、document push）。
 
 GitHub Actions 负责：
 
-- Windows x86_64；
+- Windows x86_64（`x64-windows-static` 静态 CRT + 静态第三方库，
+  2026-09-28 起：单 exe 自包含；CI dumpbin 门 + release 解包冒烟双防回归）；
 - macOS arm64（x86_64 已移除：macos-13 runner 长期排队，Intel 包待交叉编译方案）；
 - Linux x86_64 + arm64；
 - Release Asset；

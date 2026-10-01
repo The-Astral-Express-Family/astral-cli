@@ -3,5 +3,6 @@
 # works unmodified; this script only points core.hooksPath at the repo.
 
 $root = Split-Path -Parent $PSScriptRoot
+git -C $root update-index --chmod=+x scripts/git-hooks/pre-commit 2>$null
 git -C $root config core.hooksPath scripts/git-hooks
 Write-Host "git hooks installed (core.hooksPath=scripts/git-hooks)"

@@ -9,6 +9,7 @@
 
 #include "auth/device_flow.hpp"
 #include "core/error.hpp"
+#include "platform/browser.hpp"
 
 namespace {
 
@@ -215,4 +216,11 @@ TEST_CASE("a URL without a scheme is a local input error") {
         CHECK(error.code() == astral::core::Errc::LocalWorkspaceError);
     }
     CHECK(fake.requestedUrls.empty());
+}
+
+// 闸位验证（no_browser.cpp listener 常开 ASTRAL_NO_BROWSER）：openInBrowser
+// 对假域名也是 no-op 返回 false。绝不在此测试里摘闸——摘闸即真开浏览器
+// （2026-09-28 事故路径）；未加闸路径属真实用户行为，不进自动化。
+TEST_CASE("openInBrowser is a no-op under the ASTRAL_NO_BROWSER kill switch") {
+    REQUIRE_FALSE(astral::platform::openInBrowser("https://api.test/device?user_code=TEST-CODE"));
 }

@@ -1,5 +1,7 @@
 #include "platform/browser.hpp"
 
+#include <core/env.hpp>
+
 #include <string_view>
 
 #ifdef _WIN32
@@ -16,6 +18,12 @@
 namespace astral::platform {
 
 bool openInBrowser(const std::string& url) {
+    // 测试/CI 逃生开关：单元测试会走到 device-flow 呈现路径（api.test 假域名），
+    // ctest 控制台下 stdin 是 TTY，缺门会真实拉起用户浏览器（2026-09-28 事故）。
+    // 非 TTY 与 interactive 门已各有判断，这里是最后一道硬闸。
+    if (core::env::get("ASTRAL_NO_BROWSER").has_value()) {
+        return false;
+    }
 #ifdef _WIN32
     HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     return reinterpret_cast<INT_PTR>(result) > 32;

@@ -2,7 +2,8 @@
 # and need ASTRAL_TEST_SERVER to point at a reachable Astral server
 # (e.g. http://localhost:8080 for local development).
 
-add_executable(astral-integration-tests test_http_client.cpp)
+add_executable(astral-integration-tests test_http_client.cpp
+  test_update_check.cpp)
 target_link_libraries(astral-integration-tests PRIVATE astral::core Catch2::Catch2WithMain)
 astral_set_warnings(astral-integration-tests)
 

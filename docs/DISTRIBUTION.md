@@ -1,29 +1,38 @@
 # Astral CLI 发行链路设计与实施计划
 
-> 状态：设计定稿、未实施（2026-09-26 规划轮产出；本文取代散落在
-> ARCHITECTURE §16 / roadmap 注记里的发行待办，成为 Distribution MVP
-> 的执行设计）。实施进度以文末 R0-R5 勾选为准。
+> 状态：设计定稿；**2026-09-28 状态刷新**——并行会话已落地自更新切片
+> （版本烙入 / `astral update` / 安装脚本 / release 强化，commits
+> ca84b15..cce9cf2，spec 见
+> [superpowers/specs/2026-09-27-distribution-update-design.md](superpowers/specs/2026-09-27-distribution-update-design.md)），
+> 并以 5 个 `v0.1.1-alpha.N` tag 演练了全流程。本文仍是 Distribution MVP
+> 的总控（自更新切片不覆盖的部分：Windows 静态链接、glibc 基线、SBOM、
+> 包管理器、签名），实施进度以文末 R0-R5 勾选为准。
 >
 > 需求依据（modulator 仓）：FR-015（三端发行）、NFR-001（单文件/极小
 > 依赖集）、NFR-008（三端 build smoke）、ADR-0007（原生发行决策）、
 > roadmap「Distribution MVP」里程碑与 MVP DoD（"downloadable assets
 > pass smoke test; at least Homebrew + Scoop are functional"）。
 
-## 1. 现状与缺口（2026-09-26 盘点）
+## 1. 现状与缺口（2026-09-28 刷新）
 
-release.yml 已具备骨架（4 目标矩阵、打包、SHA256SUMS、gh release create）
-但**从未执行过**（零 tag、零 run、零 Release）。与目标之间的全部缺口：
+release.yml 已经 **5 次 alpha tag 真实演练**（v0.1.1-alpha.1~5，含
+prerelease 语义、版本烙入、`update --check` 冒烟、tag↔VERSION 校验）。
+已落地：版本一致性门（原 G2 ✅）、版本烙入与 semver 解析（含 prerelease
+排序）、`astral update` 自更新（exit 10 供应链红线）、POSIX/Windows 安装
+脚本（作为 raw 引用主推入口——ADR-0007 只禁"curl|sh 唯一通道"，多渠道
+并存合规）。**但 archive 产物本身的质量缺口一个没修**，且已随 5 个
+alpha 连发：
 
-| # | 缺口 | 严重度 |
+| # | 缺口 | 严重度（2026-09-28） |
 |---|---|---|
-| G1 | Windows 走默认 `x64-windows` 动态 triplet，zip 只拷 `astral.exe`——产物缺 vcpkg runtime DLL，解包即不可运行 | **阻塞** |
-| G2 | 版本号双轨：`project(VERSION 0.1.0)` 硬编码，tag（`v*`）与其无联动无校验 | 阻塞 |
-| G3 | packaged-binary smoke 缺失：smoke 只打构建树产物，未从 archive 解包验证（G1 因此漏网） | 阻塞 |
+| G1 | ~~Windows 动态 triplet 缺 DLL~~ **2026-09-28 已修**：CI/release 矩阵切 `x64-windows-static`（静态 CRT，单 exe 自包含），dumpbin 门 + release 解包冒烟双防回归；存量 alpha.1~5 仍是坏包，下次 tag 才体现 | 已闭合（待下次 tag 验证） |
+| G2 | ~~版本号双轨~~ ✅ 已修：release workflow 构建前校验 tag↔VERSION，版本烙入 `-DASTRAL_EMBED_VERSION` | 已闭合 |
+| G3 | packaged smoke：**2026-09-28 最小面已修**——release 打包后同 job 从 archive 解包运行（bsdtar 解 zip）；跨平台干净 runner 矩阵（§6）仍留 R0+ | 最小面已闭合 |
 | G4 | 无 SBOM；无签名/公证步骤（ADR-0007 与 roadmap 共通项） | 高 |
-| G5 | 包管理器零落地（Scoop bucket / Homebrew tap / deb 均无仓库无 manifest） | 高（DoD 硬项） |
-| G6 | macOS x86_64 产物缺失（macos-13 runner 移除后未补） | 中 |
-| G7 | Linux glibc 基线只有 README 一句话（ubuntu-24.04 = glibc 2.39，相当新），无兼容验证、无最低基线声明落档 | 中 |
-| G8 | 无 CPack；打包手工 cp，`install()` 规则与发行物脱节；release 构建用 `ci` preset（语义错位） | 低（顺带修） |
+| G5 | 包管理器零落地（Scoop bucket / Homebrew tap / deb 均无仓库无 manifest；自更新切片明确将其留作"计划中"） | 高（DoD 硬项） |
+| G6 | macOS x86_64 产物缺失（macos-13 runner 移除后未补；自更新 spec 的平台映射表列了 macos-x64，但 workflow 矩阵仍是 4 目标） | 中 |
+| G7 | Linux glibc 基线仍只有 README 一句话（ubuntu-24.04 = glibc 2.39），无兼容验证、无最低基线声明落档；安装脚本会把 2.39 基线的产物发给老发行版用户 | 中（随 install.sh 上线而升高） |
+| G8 | 打包仍手工 cp `build/ci/` 产物（ci preset 带 tests），`install()` 规则与发行物脱节 | 低（顺带修） |
 
 ## 2. 目标与验收映射
 
@@ -147,7 +156,7 @@ publish 前独立 job：**下载 archive 产物本身**（非构建树），在�
 
 | # | 决策 | 建议 |
 |---|---|---|
-| D-A | 首发版本与时机 | v0.1.0，在 agent credential CLI（docs/AGENT-CREDENTIALS.md P1/P2）落地后一并打 tag |
+| D-A | 首发版本与时机 | alpha 序列已至 `v0.1.1-alpha.5`（坏 Windows 包连发 5 次）；建议 R0 archive 三件套修完后打 `v0.1.1-rc1`，正式 `v0.1.1` 可与 agent credential CLI（docs/AGENT-CREDENTIALS.md P1/P2）落地后合并窗口 |
 | D-B | scoop bucket / homebrew tap 两个新仓库的建立与 workflow 开 PR 所需 token 权限 | 建 `scoop-astral` 与 `homebrew-tap` 于同 org；v1 用 PAT 开 PR、人合 |
 | D-C | macOS Apple Developer 账号（$99/年）与 Windows 签名证书（EV 约 $数百/年 / Azure Trusted Signing）是否采购 | 不采购则签名长期停留 §8 右列降级态；Scoop/手动安装不受阻 |
 | D-D | deb 先行还是 rpm 先行 | deb（本机 WSL 即 Debian 部署场景）；rpm 触发式 |
@@ -155,13 +164,22 @@ publish 前独立 job：**下载 archive 产物本身**（非构建树），在�
 
 ## 11. 实施阶段（R0-R5，每段收尾 = CI 绿 + 对应验收达成）
 
-- [ ] **R0 首发布打通（阻塞项清零）**：`dist` preset + Windows 静态
-  triplet + Linux 基线切 22.04 + tag↔版本断言 + `cmake --install`
-  staging 打包 + packaged smoke 矩阵；打 `v0.1.0-rc1` 试跑全流程。
+> 2026-09-28 状态：tag↔版本断言与版本烙入已由自更新切片落地（并入 R0
+> 记账）；`astral update` / 安装脚本 / 5 次 alpha 演练超出本文原范围，
+> 属并行切片（§头部 spec 链接），不占 R 段编号。**R0 剩余=archive 质量
+> 三件套（G1 静态 triplet、G3 packaged smoke、22.04 基线），修完前任何
+> alpha 的 Windows zip 都不可用（§1 实锤），install.sh 的 Linux 用户也
+> 拿的是 2.39 基线产物。**
+
+- [ ] **R0 首发布打通（archive 质量清零）**：~~tag↔版本断言~~✅ +
+  ~~Windows 静态 triplet~~✅（2026-09-28，x64-windows-static + dumpbin 门）
+  + ~~archive 解包冒烟~~✅（release 同 job 最小面）+ 剩余：`dist` preset、
+  Linux 基线切 22.04、`cmake --install` staging 打包、SBOM、跨平台干净
+  runner 冒烟矩阵；打 `v0.1.1-rc1` 试跑全流程（alpha 序列已消耗至 0.1.1）。
   验收：4 archives + SHA256SUMS + SBOM 挂 draft release，smoke 全绿，
-  Windows zip 解包即跑。
+  Windows zip 在无 vcpkg 环境解包即跑。
 - [ ] **R1 基线落档**：README/ARCHITECTURE §16 声明 glibc 2.35 与产物
-  矩阵；GLIBC 符号审计进 smoke。
+  矩阵；GLIBC 符号审计进 smoke；install.sh 按基线提示老发行版。
 - [ ] **R2 Scoop**：bucket 仓库 + manifest 生成 + PR 流程；新机安装验收。
 - [ ] **R3 Homebrew + macOS x64**：tap 仓库 + formula 生成；`x64-osx`
   交叉构建补第五产物；brew 安装验收。

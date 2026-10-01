@@ -4,6 +4,10 @@
 
 namespace astral::core {
 
+const char* versionString() {
+    return kEmbedVersion;
+}
+
 const char* buildPlatform() {
 #if defined(_WIN64)
     return "windows/x86_64";
@@ -23,16 +27,14 @@ const char* buildPlatform() {
 }
 
 std::string identityString() {
-    return std::string(kProjectName) + " " + kProjectVersion + " (" + kGitDescribe + ", " +
+    return std::string(kProjectName) + " " + versionString() + " (" + kGitDescribe + ", " +
            buildPlatform() + ", protocol " + std::to_string(kProtocolVersion) + ")";
 }
 
 nlohmann::json identityFields(const bool withName) {
     nlohmann::json fields = {
-        {"version", kProjectVersion},
-        {"git", kGitDescribe},
-        {"platform", buildPlatform()},
-        {"protocolVersion", kProtocolVersion},
+        {"version", kProjectVersion},  {"embedVersion", kEmbedVersion},       {"git", kGitDescribe},
+        {"platform", buildPlatform()}, {"protocolVersion", kProtocolVersion},
     };
     if (withName) {
         fields["name"] = kProjectName;

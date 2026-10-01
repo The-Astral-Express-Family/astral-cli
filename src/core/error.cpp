@@ -48,6 +48,8 @@ std::string_view AstralError::codeString() const noexcept {
         return "USAGE";
     case Errc::Internal:
         return "INTERNAL";
+    case Errc::UpdateIntegrity:
+        return "UPDATE_INTEGRITY";
     }
     return "INTERNAL";
 }
@@ -81,6 +83,8 @@ int AstralError::exitCode() const noexcept {
     case Errc::RegistrationRejected:
     case Errc::Internal:
         return static_cast<int>(ExitCode::GenericFailure);
+    case Errc::UpdateIntegrity:
+        return static_cast<int>(ExitCode::UpdateIntegrity);
     }
     return static_cast<int>(ExitCode::GenericFailure);
 }

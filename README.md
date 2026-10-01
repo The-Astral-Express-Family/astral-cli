@@ -39,10 +39,47 @@ astral version                  # 版本信息（已可用）
 ```
 
 - Human 输出带颜色（遵循 `NO_COLOR`、TTY 检测）；`--json` 模式 stdout 恒为单个 JSON 对象，进度/诊断走 stderr。
-- 退出码稳定：`0` 成功、`1` 一般失败、`2` 用法错误、`3` 鉴权失败、`4` 未找到、`5` 冲突、`6` 网络、`7` 超时、`8` 本地工作区错误、`9` 协议不兼容。
+- 退出码稳定：`0` 成功、`1` 一般失败、`2` 用法错误、`3` 鉴权失败、`4` 未找到、`5` 冲突、`6` 网络、`7` 超时、`8` 本地工作区错误、`9` 协议不兼容、`10` 更新包校验失败。
 - 凭证存为普通 JSON 文件 `~/.astral-cli/credentials.json`（双槽：human 会话按 server URL、
   agent credential 按 `server_id`，0600 权限，原子写入，modulator TODO §11 D12）——不依赖
   keyring，三端一致，`cat` 可查、`cp` 可备份；`ASTRAL_TOKEN` 优先于该文件且不落盘。
+
+## 安装
+
+### 一键安装（推荐）
+
+Linux / macOS（POSIX sh）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/The-Astral-Express-Family/astral-cli/main/scripts/install.sh | sh
+```
+
+Windows（PowerShell 5.1+）：
+
+```powershell
+powershell -c "iwr -useb https://raw.githubusercontent.com/The-Astral-Express-Family/astral-cli/main/scripts/install.ps1 | iex"
+```
+
+- 安装位置：POSIX 为 `~/.local/bin/astral`；Windows 为 `%LOCALAPPDATA%\Programs\astral\astral.exe`（自动追加用户 PATH，重开终端生效）。
+- 装指定版本：`ASTRAL_VERSION=v0.2.1 sh install.sh`（或 PowerShell 里 `$env:ASTRAL_VERSION='v0.2.1'`）。
+- 自定义 POSIX 安装目录：`ASTRAL_INSTALL_DIR=/custom/bin sh install.sh`（注意：非约定位置安装的二进制不可 `astral update` 自更新）。
+- 脚本依赖仅 curl/tar/sha256sum（POSIX）或系统自带 PowerShell cmdlet（Windows）。代理：POSIX 版经 curl 自动识别 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` 环境变量；Windows 版遵循系统代理设置（WinINET）。
+
+### 包管理器
+
+brew / winget / scoop 渠道**计划中**，当前请用上述脚本或源码构建。
+
+## 更新
+
+```bash
+astral update              # 升级到最新 release
+astral update v0.2.1      # 安装指定版本（支持降级回滚）
+astral update --check      # 只查询不安装，报告最新版本
+```
+
+- 仅在约定安装位置（`~/.local/bin`、`%LOCALAPPDATA%\Programs\astral`）的安装可自更新；源码构建/自定义位置会得到退出码 8 的明确提示。
+- 下载后强制 SHA256 校验（对 SHA256SUMS.txt），失配退出码 10。
+- 代理：读取标准 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` 环境变量（含小写变体），无额外配置。
 
 ## 环境要求
 
@@ -62,7 +99,7 @@ export VCPKG_ROOT="$HOME/vcpkg"                    # 建议写入 shell 配置
 ```
 
 依赖（`vcpkg.json`，baseline 已锁）：CLI11、libcurl、nlohmann/json、spdlog、fmt、
-picosha2（header-only SHA-256，文档 content_hash 专用）；测试附加 Catch2。
+libarchive（解包 update 资产）、picosha2（header-only SHA-256）；测试附加 Catch2。
 
 ## 构建与测试
 
@@ -85,6 +122,11 @@ cmake --preset asan && cmake --build --preset asan         # AddressSanitizer + 
 
 可选开关：`-DASTRAL_ENABLE_INTEGRATION_TESTS=ON`（需 `ASTRAL_TEST_SERVER` 指向活服务器）、
 `-DASTRAL_ENABLE_CONTRACT_TESTS=ON`（协议快照契约测试）、`-DASTRAL_ENABLE_CLANG_TIDY=ON`。
+
+Windows 本地 vcpkg 构建请与 CI/发行同款加
+`-DVCPKG_TARGET_TRIPLET=x64-windows-static`（静态 CRT + 静态第三方库，
+单 exe 自包含）；CI 的 dumpbin 门与 release 的解包冒烟都按全静态断言，
+动态产物会被拒。
 
 试运行：
 
@@ -114,8 +156,7 @@ sh scripts/setup.sh          # Windows 亦可: powershell scripts/setup.ps1
 - **CI**（`.github/workflows/ci.yml`）：提交信息校验 → clang-format 检查 → 4 平台矩阵构建 + 单测 + 冒烟
   （ubuntu-x64/arm64、macos-arm64、windows-x64），Linux 额外跑协议契约测试。
   （macos-13/x64 已移除：该 runner 长期排队超 24h 必被取消，Intel 包待交叉编译方案。）
-- **Release**（`.github/workflows/release.yml`）：打 `v*` 标签触发，4 目标产物打包（tar.gz/zip）+
-  SHA256SUMS + GitHub Release。Linux 产物以 ubuntu-24.04 为 glibc 基线。
+- **Release**（`.github/workflows/release.yml`）：打 `v*` 标签触发，先校验 tag 与 `CMakeLists.txt` project VERSION 一致（失配即 fail），再将 tag 版本烙入二进制（`-DASTRAL_EMBED_VERSION`），产出 4 目标包（tar.gz/zip）+ SHA256SUMS + 安装脚本（install.sh/install.ps1）+ GitHub Release，冒烟含 `astral update --check`。Linux 产物以 ubuntu-24.04 为 glibc 基线。
 
 ## 目录结构
 

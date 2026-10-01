@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,10 +15,12 @@
 #include "auth/api.hpp"
 #include "commands/command.hpp"
 #include "commands/paging.hpp"
+#include "core/content_hash.hpp"
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
 #include "output/style.hpp"
+#include "platform/stdin.hpp"
 
 namespace astral::commands {
 
@@ -38,11 +41,35 @@ std::string padRight(const std::string& text, std::size_t width) {
     return text.size() >= width ? text : text + std::string(width - text.size(), ' ');
 }
 
+// add-tree 响应（TaskTreeBatchCreated）的节点统计与缩进渲染：镜像请求
+// 树形，子层两空格缩进，行内 id + title。
+void countTreeNodes(const json& nodes, std::size_t& total) {
+    for (const auto& node : nodes) {
+        ++total;
+        if (auto children = node.find("children"); children != node.end() && children->is_array()) {
+            countTreeNodes(*children, total);
+        }
+    }
+}
+
+void printTreeCreated(std::ostream& out, const json& nodes, int depth) {
+    for (const auto& node : nodes) {
+        const json& task = node.at("task");
+        out << std::string(static_cast<std::size_t>(depth) * 2, ' ') << "- " << scalarOr(task, "id")
+            << "  " << scalarOr(task, "title") << '\n';
+        if (auto children = node.find("children"); children != node.end() && children->is_array()) {
+            printTreeCreated(out, *children, depth + 1);
+        }
+    }
+}
+
 // Task list/search read flags: shared paging (--limit/--all) + the
-// task-specific status filter.
+// task-specific status filter + dependency filters (protocol 2.2).
 struct TaskPageFlags {
     PageFlags paging;
     std::string status;
+    bool blocked = false;
+    std::string blockedBy;
 };
 
 void addPageFlags(CLI::App& app, TaskPageFlags& flags) {
@@ -50,6 +77,10 @@ void addPageFlags(CLI::App& app, TaskPageFlags& flags) {
     app.add_option("--status", flags.status, "Filter by task status")
         ->check(CLI::IsMember(
             std::vector<std::string>{std::begin(kTaskStatuses), std::end(kTaskStatuses)}));
+    app.add_flag("--blocked", flags.blocked,
+                 "Only tasks with an unfinished blocking dependency (protocol 2.2)");
+    app.add_option("--blocked-by", flags.blockedBy,
+                   "Only tasks blocked by this task id (protocol 2.2)");
 }
 
 std::string pageQuery(const TaskPageFlags& flags) {
@@ -57,8 +88,26 @@ std::string pageQuery(const TaskPageFlags& flags) {
     if (!flags.status.empty()) {
         appendParam(query, "status", flags.status);
     }
+    if (flags.blocked) {
+        appendParam(query, "blocked", "true");
+    }
+    appendParam(query, "blocked_by", flags.blockedBy);
     addPageParams(query, flags.paging);
     return query;
+}
+
+// joinIds 渲染 Task 视图里的 id 数组字段（blocked_by/blocks/related）。
+std::string joinIds(const json& task, const char* field) {
+    std::string out;
+    if (auto array = task.find(field); array != task.end() && array->is_array()) {
+        for (const auto& id : *array) {
+            if (!out.empty()) {
+                out += ", ";
+            }
+            out += id.get<std::string>();
+        }
+    }
+    return out.empty() ? "-" : out;
 }
 
 void printTaskTable(std::ostream& out, const json& items, bool withScore) {
@@ -112,13 +161,10 @@ void printTaskDetail(std::ostream& out, const Painter& paint, const json& task) 
     line("priority", scalarOr(task, "priority", "normal"));
     line("assignee", scalarOr(task, "assignee_actor_id", "-"));
     line("parent", scalarOr(task, "parent_id", "-"));
+    line("blocked_by", joinIds(task, "blocked_by"));
+    line("blocks", joinIds(task, "blocks"));
+    line("related", joinIds(task, "related"));
     line("revision", scalarOr(task, "revision"));
-    if (auto lease = task.find("lease"); lease != task.end() && lease->is_object()) {
-        line("lease",
-             scalarOr(*lease, "holder_actor_id") + " until " + scalarOr(*lease, "expires_at"));
-    } else {
-        line("lease", "-");
-    }
     std::string tags;
     if (auto array = task.find("tags"); array != task.end() && array->is_array()) {
         for (const auto& tag : *array) {
@@ -220,21 +266,36 @@ public:
         add->add_option("--description", description_, "Task description");
         add->add_option("--tag", tags_, "Existing tag name (repeatable)");
 
-        CLI::App* show = app.add_subcommand("show", "Show one task (includes tags and lease)");
+        CLI::App* show =
+            app.add_subcommand("show", "Show one task (includes tags and dependencies)");
         show->add_option("task_id", taskId_, "Task id")->required();
 
-        CLI::App* claim = app.add_subcommand("claim", "Atomically claim a task (acquire lease)");
+        CLI::App* claim =
+            app.add_subcommand("claim", "Atomically claim a task (assign yourself + in_progress)");
         claim->add_option("task_id", taskId_, "Task id")->required();
         claim->add_option("--revision", revision_,
                           "Expected revision (default: read the task's current revision)");
-        claim
-            ->add_option("--lease-seconds", leaseSeconds_, "Lease duration, 30..3600 (default 300)")
-            ->check(CLI::Range(30, 3600));
 
-        CLI::App* done = app.add_subcommand("done", "Mark a task done (optimistic concurrency)");
-        done->add_option("task_id", taskId_, "Task id")->required();
+        CLI::App* done = app.add_subcommand("done", "Mark task(s) done (1 = PATCH, N = batch)");
+        done->add_option("task_id", doneIds_, "Task ids (one or more)")->required()->expected(-1);
         done->add_option("--revision", revision_,
-                         "Expected revision (default: read the task's current revision)");
+                         "Expected revision (single-id form only; default: read the current one)");
+
+        // 协议 2.1 task_batch：批量树形创建——嵌套 JSON 一次投递整棵子树
+        // （--parent 选 task 容器，缺省 workspace 根层）；确定性幂等键使
+        // 重跑安全（服务端整批单事务全有或全无）。
+        CLI::App* addTree = app.add_subcommand(
+            "add-tree", "Create a batch of task trees from a nested JSON file (or '-' for stdin)");
+        addTree->add_option("--file", treeFile_, "JSON file: {\"trees\":[...]} or a bare array")
+            ->required();
+        addTree->add_option("--parent", parent_, "Create the trees under this task");
+
+        // v2.1：移动 = PATCH parent_id 三态；'-' 表示移回根层（null）。
+        CLI::App* move =
+            app.add_subcommand("move", "Move a task under another container ('-' = root)");
+        move->add_option("task_id", taskId_, "Task id")->required();
+        move->add_option("--to", moveTo_, "New parent task id, or '-' for the workspace root")
+            ->required();
 
         CLI::App* update =
             app.add_subcommand("update", "Update task fields (optimistic concurrency)");
@@ -252,13 +313,28 @@ public:
         update->add_option("--revision", revision_,
                            "Expected revision (default: read the task's current revision)");
 
-        // v2 lease 管理：renew 仅 holder 可续；release 主动让出（204 无响应体）。
-        CLI::App* lease = app.add_subcommand("lease", "Manage the lease on a claimed task");
-        lease->require_subcommand(1);
-        CLI::App* renew = lease->add_subcommand("renew", "Renew a lease you hold (holder only)");
-        renew->add_option("task_id", taskId_, "Task id")->required();
-        CLI::App* release = lease->add_subcommand("release", "Release a lease you hold");
+        // 2.3（租约时间维度拆除）：无 renew/release-lease；释放认领 =
+        // DELETE /tasks/{id}/claim（claimant 或 task:override，幂等 204）。
+        CLI::App* release =
+            app.add_subcommand("release", "Release your claim (or override with task:override)");
         release->add_option("task_id", taskId_, "Task id")->required();
+
+        // 协议 2.2 task_dependencies：依赖边管理。方向 = <task_id> 依赖
+        // <on_task_id>（blocks 缺省，--relates 对称关联）。
+        CLI::App* dep = app.add_subcommand("dep", "Manage task dependencies (blocks / relates)");
+        dep->require_subcommand(1);
+        CLI::App* depAdd = dep->add_subcommand("add", "Make <task_id> depend on <on_task_id>");
+        depAdd->add_option("task_id", taskId_, "Dependent task id")->required();
+        depAdd->add_option("on_task_id", depPeer_, "Task it depends on (the blocker)")->required();
+        depAdd->add_flag("--relates", depRelates_,
+                         "Record a symmetric relation instead of a block");
+        CLI::App* depRemove = dep->add_subcommand("remove", "Remove the dependency edge");
+        depRemove->add_option("task_id", taskId_, "Dependent task id")->required();
+        depRemove->add_option("on_task_id", depPeer_, "Task it depended on")->required();
+        depRemove->add_flag("--relates", depRelates_, "Remove the relates edge instead of blocks");
+        CLI::App* depList =
+            dep->add_subcommand("list", "List dependency edges of a task (both directions)");
+        depList->add_option("task_id", taskId_, "Task id")->required();
 
         // v2 tag 挂载/摘除：幂等语义服务端保证（D11），<tag> 为词典名或 tag_ id。
         CLI::App* tag = app.add_subcommand("tag", "Attach or detach workspace tags on a task");
@@ -282,14 +358,18 @@ public:
 
         listSub_ = list;
         addSub_ = add;
+        addTreeSub_ = addTree;
+        moveSub_ = move;
         showSub_ = show;
         claimSub_ = claim;
         doneSub_ = done;
         searchSub_ = search;
         updateSub_ = update;
-        leaseSub_ = lease;
-        leaseRenewSub_ = renew;
-        leaseReleaseSub_ = release;
+        releaseSub_ = release;
+        depSub_ = dep;
+        depAddSub_ = depAdd;
+        depRemoveSub_ = depRemove;
+        depListSub_ = depList;
         tagSub_ = tag;
         tagAttachSub_ = attach;
         tagDetachSub_ = detach;
@@ -301,6 +381,12 @@ public:
         }
         if (node_->got_subcommand(addSub_)) {
             return runAdd(context);
+        }
+        if (node_->got_subcommand(addTreeSub_)) {
+            return runAddTree(context);
+        }
+        if (node_->got_subcommand(moveSub_)) {
+            return runMove(context);
         }
         if (node_->got_subcommand(showSub_)) {
             return runShow(context);
@@ -317,14 +403,20 @@ public:
         if (node_->got_subcommand(updateSub_)) {
             return runUpdate(context);
         }
-        if (node_->got_subcommand(leaseSub_)) {
-            if (leaseSub_->got_subcommand(leaseRenewSub_)) {
-                return runLeaseRenew(context);
+        if (node_->got_subcommand(releaseSub_)) {
+            return runRelease(context);
+        }
+        if (node_->got_subcommand(depSub_)) {
+            if (depSub_->got_subcommand(depAddSub_)) {
+                return runDepAdd(context);
             }
-            if (leaseSub_->got_subcommand(leaseReleaseSub_)) {
-                return runLeaseRelease(context);
+            if (depSub_->got_subcommand(depRemoveSub_)) {
+                return runDepRemove(context);
             }
-            throw core::AstralError(core::Errc::Usage, "no todo lease subcommand selected");
+            if (depSub_->got_subcommand(depListSub_)) {
+                return runDepList(context);
+            }
+            throw core::AstralError(core::Errc::Usage, "no todo dep subcommand selected");
         }
         if (node_->got_subcommand(tagSub_)) {
             if (tagSub_->got_subcommand(tagAttachSub_)) {
@@ -436,7 +528,16 @@ private:
 
         const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/children"
                                                  : "/tasks/" + parent_ + "/children";
-        const json task = auth::sendJson(api, "POST", path, body, "task create");
+        // 重试不得双建：确定性 Idempotency-Key（同 actor+endpoint+key 24h
+        // 重放首次 2xx；key 源覆盖全部创建入参，与 msg/document 同纪律）。
+        std::string keySource =
+            ws.workspaceId + "|" + parent_ + "|" + title_ + "|" + description_ + "|" + priority_;
+        for (const std::string& tag : tags_) {
+            keySource += "|" + tag;
+        }
+        const json task =
+            auth::sendJson(api, "POST", path, body, "task create",
+                           {{"Idempotency-Key", "todo-" + core::fnv1aHex(keySource)}});
 
         if (context.json) {
             output::printJson(context.out, task);
@@ -466,18 +567,16 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const json body{{"expected_revision", expectedRevision(api)},
-                        {"lease_seconds", leaseSeconds_.value_or(300)}};
-        const json result =
+        const json body{{"expected_revision", expectedRevision(api)}};
+        const json task =
             auth::sendJson(api, "POST", "/tasks/" + taskId_ + "/claim", body, "task claim");
 
         if (context.json) {
-            output::printJson(context.out, result); // ClaimResult {task, lease} verbatim
+            output::printJson(context.out, task); // Task verbatim（2.3 ClaimResult={task}）
             return 0;
         }
-        const json& lease = result.at("lease");
-        context.out << "Claimed " << taskId_ << " - holder " << scalarOr(lease, "holder_actor_id")
-                    << " until " << scalarOr(lease, "expires_at") << '\n';
+        context.out << "Claimed " << taskId_ << " (assignee " << scalarOr(task, "assignee_actor_id")
+                    << ", revision " << scalarOr(task, "revision") << ")" << '\n';
         return 0;
     }
 
@@ -486,15 +585,121 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
-        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
+        // 单 id：走既有 PATCH（逐任务乐观并发，行为与批量语义一致）。
+        if (doneIds_.size() == 1) {
+            taskId_ = doneIds_.front();
+            const json body{{"expected_revision", expectedRevision(api)}, {"status", "done"}};
+            const json task =
+                auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task update");
+
+            if (context.json) {
+                output::printJson(context.out, task);
+                return 0;
+            }
+            context.out << "Marked " << taskId_ << " done (revision " << scalarOr(task, "revision")
+                        << ")\n";
+            return 0;
+        }
+
+        // 多 id：协议 2.1 batch-update 一次整批（服务端单事务全有或全无，
+        // 部分失败时整批不生效，重跑安全——revision 预读自当前状态）。
+        json items = json::array();
+        for (const std::string& id : doneIds_) {
+            items.push_back(json{{"task_id", id}, {"expected_revision", currentRevision(api, id)}});
+        }
+        const json body{
+            {"items", items},
+            {"set", json{{"status", "done"}}},
+        };
+        const json result =
+            auth::sendJson(api, "POST", "/workspaces/" + ws.workspaceId + "/tasks/batch-update",
+                           body, "task batch update");
+
+        if (context.json) {
+            output::printJson(context.out, result); // TaskBatchResult {items} verbatim
+            return 0;
+        }
+        for (const auto& task : result.at("items")) {
+            context.out << "Marked " << scalarOr(task, "id") << " done (revision "
+                        << scalarOr(task, "revision") << ")\n";
+        }
+        return 0;
+    }
+
+    // runMove：PATCH parent_id 三态（'-' = null = 根层）；移动语义与字段
+    // 更新分属不同动词，与 update 共享 revision 节拍。
+    int runMove(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        json body{{"expected_revision", expectedRevision(api)}};
+        if (moveTo_ == "-") {
+            body["parent_id"] = nullptr;
+        } else {
+            body["parent_id"] = moveTo_;
+        }
+        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task move");
 
         if (context.json) {
             output::printJson(context.out, task);
             return 0;
         }
-        context.out << "Marked " << taskId_ << " done (revision " << scalarOr(task, "revision")
-                    << ")\n";
+        context.out << "Moved " << taskId_ << " -> "
+                    << (moveTo_ == "-" ? std::string("workspace root") : moveTo_) << " (revision "
+                    << scalarOr(task, "revision") << ")\n";
+        return 0;
+    }
+
+    // runAddTree：嵌套 JSON 一次投递（协议 2.1 task-trees）。输入接受
+    // {"trees":[...]} 或裸数组；幂等键 = 内容 hash，重跑同文件服务端重放
+    // 首次响应，不会双建。
+    int runAddTree(const CommandContext& context) {
+        std::string content;
+        if (treeFile_ == "-") {
+            content = platform::readStdinBinary();
+        } else {
+            std::ifstream input(treeFile_, std::ios::binary);
+            if (!input) {
+                throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
+            }
+            // 分块读取（istreambuf_iterator 被 AGENTS.md 禁用）。
+            char buffer[8192];
+            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
+                content.append(buffer, static_cast<std::size_t>(input.gcount()));
+            }
+        }
+        json parsed;
+        try {
+            parsed = json::parse(content);
+        } catch (const json::parse_error& error) {
+            throw core::AstralError(core::Errc::Usage,
+                                    std::string("invalid JSON input: ") + error.what());
+        }
+        json trees = parsed.contains("trees") ? parsed.at("trees") : parsed;
+        if (!trees.is_array() || trees.empty()) {
+            throw core::AstralError(
+                core::Errc::Usage,
+                "input must be {\"trees\":[...]} or a non-empty array of task nodes");
+        }
+
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+
+        const std::string path = parent_.empty() ? "/workspaces/" + ws.workspaceId + "/task-trees"
+                                                 : "/tasks/" + parent_ + "/task-trees";
+        const json body{{"trees", trees}};
+        const json result = auth::sendJson(
+            api, "POST", path, body, "task tree create",
+            {{"Idempotency-Key",
+              "todo-tree-" + core::fnv1aHex(ws.workspaceId + "|" + parent_ + "|" + content)}});
+
+        if (context.json) {
+            output::printJson(context.out, result); // TaskTreeBatchCreated verbatim
+            return 0;
+        }
+        const json& created = result.at("items");
+        std::size_t total = 0;
+        countTreeNodes(created, total);
+        context.out << "Created " << total << " task(s) in " << created.size() << " tree(s):\n";
+        printTreeCreated(context.out, created, 1);
         return 0;
     }
 
@@ -539,39 +744,82 @@ private:
         return 0;
     }
 
-    int runLeaseRenew(const CommandContext& context) {
+    // runRelease：DELETE /tasks/{id}/claim（2.3 租约拆除：claimant 或
+    // task:override；204 幂等——已无认领同样 204）。
+    int runRelease(const CommandContext& context) {
         // One session per run: discovery exactly once; unresolvable targets get the
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        // 协议无 requestBody，带 body 反而不洁：走无 body 请求。
-        const client::HttpResponse response =
-            auth::sendNoBody(api, "POST", "/tasks/" + taskId_ + "/lease/renew", "lease renew");
-        const json lease = json::parse(response.body);
-
-        if (context.json) {
-            output::printJson(context.out, lease); // Lease verbatim
-            return 0;
-        }
-        context.out << "Renewed " << taskId_ << " lease - holder "
-                    << scalarOr(lease, "holder_actor_id") << " until "
-                    << scalarOr(lease, "expires_at") << '\n';
-        return 0;
-    }
-
-    int runLeaseRelease(const CommandContext& context) {
-        // One session per run: discovery exactly once; unresolvable targets get the
-        // D14 default-workspace hint from openWorkspace.
-        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
-
-        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/lease", "lease release");
+        auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/claim", "claim release");
 
         if (context.json) {
             // 204 无响应体：--json 侧的确认单对象是 CLI 呈现，非服务端原样。
             output::printJson(context.out, json{{"released", true}, {"task_id", taskId_}});
             return 0;
         }
-        context.out << "Released lease on " << taskId_ << '\n';
+        context.out << "Released claim on " << taskId_ << '\n';
+        return 0;
+    }
+
+    // runDepAdd：PUT /tasks/{a}/dependencies/{b}（body.kind 缺省 blocks，
+    // --relates 显式 relates）。服务端幂等：已存在同边 200，新建 201。
+    int runDepAdd(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        json body{{"kind", depRelates_ ? "relates" : "blocks"}};
+        const json edge = auth::sendJson(
+            api, "PUT", "/tasks/" + taskId_ + "/dependencies/" + depPeer_, body, "dependency add");
+
+        if (context.json) {
+            output::printJson(context.out, edge);
+            return 0;
+        }
+        if (depRelates_) {
+            context.out << "Related " << taskId_ << " <-> " << depPeer_ << '\n';
+        } else {
+            context.out << "Blocked " << taskId_ << " by " << depPeer_ << '\n';
+        }
+        return 0;
+    }
+
+    // runDepRemove：DELETE /tasks/{a}/dependencies/{b}?kind=（204 幂等）。
+    int runDepRemove(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        const std::string kind = depRelates_ ? "relates" : "blocks";
+        auth::sendNoBody(api, "DELETE",
+                         "/tasks/" + taskId_ + "/dependencies/" + depPeer_ + "?kind=" + kind,
+                         "dependency remove");
+
+        if (context.json) {
+            output::printJson(context.out, json{{"removed", true},
+                                                {"task_id", taskId_},
+                                                {"on_task_id", depPeer_},
+                                                {"kind", kind}});
+            return 0;
+        }
+        context.out << "Removed " << kind << " edge " << taskId_ << " -> " << depPeer_ << '\n';
+        return 0;
+    }
+
+    // runDepList：GET /tasks/{id}/dependencies（双向边全量）。
+    int runDepList(const CommandContext& context) {
+        auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
+        const json result =
+            auth::getJson(api, "/tasks/" + taskId_ + "/dependencies", "dependency list");
+
+        if (context.json) {
+            output::printJson(context.out, result); // DependencyList verbatim
+            return 0;
+        }
+        const json& items = result.at("items");
+        if (items.empty()) {
+            context.out << "No dependencies.\n";
+            return 0;
+        }
+        for (const auto& edge : items) {
+            context.out << scalarOr(edge, "from_task_id") << " -> " << scalarOr(edge, "to_task_id")
+                        << "  (" << scalarOr(edge, "kind") << ")\n";
+        }
         return 0;
     }
 
@@ -617,14 +865,18 @@ private:
     CLI::App* node_ = nullptr;
     CLI::App* listSub_ = nullptr;
     CLI::App* addSub_ = nullptr;
+    CLI::App* addTreeSub_ = nullptr;
+    CLI::App* moveSub_ = nullptr;
     CLI::App* showSub_ = nullptr;
     CLI::App* claimSub_ = nullptr;
     CLI::App* doneSub_ = nullptr;
     CLI::App* searchSub_ = nullptr;
     CLI::App* updateSub_ = nullptr;
-    CLI::App* leaseSub_ = nullptr;
-    CLI::App* leaseRenewSub_ = nullptr;
-    CLI::App* leaseReleaseSub_ = nullptr;
+    CLI::App* releaseSub_ = nullptr;
+    CLI::App* depSub_ = nullptr;
+    CLI::App* depAddSub_ = nullptr;
+    CLI::App* depRemoveSub_ = nullptr;
+    CLI::App* depListSub_ = nullptr;
     CLI::App* tagSub_ = nullptr;
     CLI::App* tagAttachSub_ = nullptr;
     CLI::App* tagDetachSub_ = nullptr;
@@ -637,14 +889,18 @@ private:
     std::string description_;
     std::vector<std::string> tags_;
     std::string taskId_;
+    std::vector<std::string> doneIds_;
+    std::string treeFile_;
+    std::string moveTo_;
     std::optional<std::int64_t> revision_;
-    std::optional<int> leaseSeconds_;
     std::string regex_;
     std::string fuzzy_;
     std::string tag_;
     std::string status_;
     std::optional<std::string> assigneeUpdate_;
     std::string tagArg_;
+    std::string depPeer_;
+    bool depRelates_ = false;
 };
 
 } // namespace

@@ -2,6 +2,7 @@ configure_file(core/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/core/v
 
 add_library(astral_core STATIC
   app/app.cpp
+  client/github_release.cpp
   auth/api.cpp
   auth/device_flow.cpp
   auth/session.cpp
@@ -16,23 +17,28 @@ add_library(astral_core STATIC
   commands/profile_cmd.cpp
   commands/register_cmd.cpp
   commands/registry.cpp
+  commands/update_cmd.cpp
+  commands/version_cmd.cpp
+  core/distribution.cpp
   commands/tags_cmd.cpp
   commands/todo_cmd.cpp
-  commands/version_cmd.cpp
   core/content_hash.cpp
   core/env.cpp
   core/error.cpp
   core/log.cpp
+  core/semver.cpp
   core/version.cpp
   events/listen.cpp
   output/json_output.cpp
   output/render.cpp
   output/style.cpp
   output/tty.cpp
-  platform/args.cpp
-  platform/atomic_file.cpp
+  platform/archive.cpp
   platform/browser.cpp
   platform/credential_store.cpp
+  platform/self_update.cpp
+  platform/args.cpp
+  platform/atomic_file.cpp
   platform/stdin.cpp
   platform/user_dirs.cpp
   workspace/binding.cpp
@@ -49,10 +55,13 @@ target_include_directories(astral_core PUBLIC
 target_link_libraries(astral_core PUBLIC
   CLI11::CLI11
   CURL::libcurl
+  LibArchive::LibArchive
   fmt::fmt
   nlohmann_json::nlohmann_json
   spdlog::spdlog
 )
+# picosha2 为 header-only，仅暴露头文件路径供 Task 9 使用。
+target_include_directories(astral_core SYSTEM PUBLIC ${PICOSHA2_INCLUDE_DIR})
 astral_set_warnings(astral_core)
 
 add_executable(astral app/main.cpp)
