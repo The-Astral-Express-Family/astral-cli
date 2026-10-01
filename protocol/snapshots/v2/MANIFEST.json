@@ -1,7 +1,7 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "3d479ae",
+  "source_commit": "dbefb75",
   "published_at": "2026-10-01",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现。本快照 v2.7 刷新自 3d479ae（modulator PR #15：邀请双轨分离 ADR-0009 集成任务协议 2.4 基线）。在 v2.6 租约拆除之上叠加：register 字段 invite_code -> registration_code 且只查注册码表；新增 POST /invitations/redeem；/admin/invitations* -> /admin/registration-invitations*；ErrorCode +ALREADY_MEMBER；Task +position 与 move/batch 端点 position 入参（info.version 2.4.0）。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现。本快照 v2.8 刷新自 dbefb75（modulator PR #17：密码找回 + 邀请邮件，协议 2.5.0）。在 v2.7 邀请双轨分离之上叠加：新增公共端点 POST /auth/password-reset（恒 204 防枚举）与 POST /auth/password-reset/confirm（一次性 token 换新口令，成功吊销全部会话）；ErrorCode +PASSWORD_RESET_INVALID；InvitationCreate +可选 email（签发即同体邮件投递，与站内码同一生命周期），Invitation +email/email_sent_at。两端点均入服务端 S5 敏感限流桶（10/min/IP）。CLI 不消费新端点（device flow 不涉密码）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -159,6 +159,18 @@
         "ErrorCode +ALREADY_MEMBER（error.schema.json 同步，含 notes）",
         "兄弟排序（协议 2.4，随集成带入）：Task +position 恒填充；move 端点 items +可选 position；children 游标换 position 键集分页（不透明可透传）",
         "CLI 侧 register 命令已适配（--registration-code，dev 侧 ebf86fd 与本合并收口）；lease/batch/dependencies 适配为 main 侧既有工作（v2.4-v2.6）"
+      ]
+    },
+    {
+      "date": "2026-10-01",
+      "label": "v2.8 快照刷新（密码找回 + 邀请邮件，协议 2.5.0）",
+      "from_commit": "3d479ae",
+      "to_commit": "dbefb75",
+      "changes": [
+        "新增公共端点 POST /auth/password-reset {email}（恒 204 防枚举，不泄露账号存在性）与 POST /auth/password-reset/confirm {token,new_password}（prt_ token 30 分钟一次性；成功吊销该账号全部会话）——均为 web 消费，CLI 不调用",
+        "ErrorCode +PASSWORD_RESET_INVALID（查无/过期/已用同文案防探测，仅 confirm 端点可达）",
+        "InvitationCreate +可选 email（00024）：签发即同体邮件投递，链接与站内码同一行同一 code_hash，撤销/过期/兑换两渠道同时失效；同 (workspace,email) 在途邀请重签即整批撤销；Invitation +email/email_sent_at 视图字段",
+        "服务端出站邮件依赖单环境变量 ASTRAL_SMTP_URL（未配置 = log transport）；info.version 2.4.0 -> 2.5.0（additive），protocol_version 恒为 2"
       ]
     }
   ]

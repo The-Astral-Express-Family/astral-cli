@@ -56,6 +56,7 @@
         "INVITE_INVALID",
         "ALREADY_MEMBER",
         "EMAIL_TAKEN",
+        "PASSWORD_RESET_INVALID",
         "REVISION_CONFLICT",
         "DOCUMENT_CONFLICT",
         "RATE_LIMITED",
@@ -66,7 +67,7 @@
         "SLOW_DOWN",
         "INTERNAL_ERROR"
       ],
-      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_FOUND 用于未知路由与无专用码的次级资源 404。APPROVAL_EXPIRED 为 approval 状态机裁决语义（architecture §22）。INVITE_INVALID 对邀请码四种失效统一同码同文案（防探测）；EMAIL_TAKEN 仅在邀请码验证通过后可达（docs/registration.md）；ALREADY_MEMBER 仅 /invitations/redeem 可达（幂等窗口外已是成员，409，ADR-0009）"
+      "notes": "AUTHORIZATION_PENDING/SLOW_DOWN 为 device flow 轮询语义（A1，RFC 8628，HTTP 400 + retryable）。NOT_FOUND 用于未知路由与无专用码的次级资源 404。APPROVAL_EXPIRED 为 approval 状态机裁决语义（architecture §22）。INVITE_INVALID 对邀请码四种失效统一同码同文案（防探测）；EMAIL_TAKEN 仅在邀请码验证通过后可达（docs/registration.md）；ALREADY_MEMBER 仅 /invitations/redeem 可达（幂等窗口外已是成员，409，ADR-0009）；PASSWORD_RESET_INVALID 为忘记密码重置 token 查无/过期/已用的统一码（400，防探测，docs/security.md）"
     }
   }
 }

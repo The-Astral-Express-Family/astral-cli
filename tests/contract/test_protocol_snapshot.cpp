@@ -145,6 +145,26 @@ TEST_CASE("task dependency endpoints are pinned in the frozen snapshot (v2.5)") 
     }
 }
 
+TEST_CASE("password reset + invitation email are pinned in the frozen snapshot (v2.8)") {
+    const std::string openapi = snapshotFile("openapi.yaml");
+    for (const char* const needle : {
+             // 00023 忘记密码两端点为 web 消费（CLI 不调用，device flow 不
+             // 涉密码）；钉住是为了冻结面完整——错误码参与全局 429 敏感桶
+             // 语义（CLI 同桶），漂移时这里先红。
+             "/auth/password-reset:",
+             "/auth/password-reset/confirm:",
+             "requestPasswordReset",
+             "confirmPasswordReset",
+             "PASSWORD_RESET_INVALID",
+             // 00024 邀请邮件：链接与站内码同一行同一生命周期（email_sent_at
+             // 缺席 = 未送达）；CLI 不消费，契约完整性钉子。
+             "email_sent_at:",
+         }) {
+        INFO("needle: " << needle);
+        REQUIRE(openapi.find(needle) != std::string::npos);
+    }
+}
+
 TEST_CASE("error enum covers the codes this CLI branches on") {
     const auto schema = snapshotJson("error.schema.json");
     const auto codes = schema.at("$defs").at("ErrorCode").at("enum");
