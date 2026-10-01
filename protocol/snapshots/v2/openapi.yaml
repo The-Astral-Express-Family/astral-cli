@@ -12,7 +12,7 @@
 openapi: 3.1.0
 info:
   title: Astral Modulator Public API
-  version: 2.3.0
+  version: 2.4.0
   license:
     name: MIT
     identifier: MIT
@@ -37,6 +37,11 @@ info:
     blocked / blocked_by 过滤。依赖目前只做表达/展示/过滤，不拦截
     claim/done。注：与并行的兄弟排序变更同轮开发，info.version 以先合入者
     为 2.2，后合入者顺延。
+
+    2.4（兄弟排序，TODO.md §9 2026-09-30）：Task 增 position（兄弟排序键），
+    children 集合按 position 升序返回（cursor 同步换为 position 键集分页）；
+    move 端点 items 增可选 position——同一次调用完成换父与兄弟内排序
+    （拖拽重排的基础）。老数据回填 = 创建正序，此后创建一律追加兄弟尾部。
 
     已裁决的文档分歧（详见 TODO.md「文档分歧裁决」D1-D4）：
     - Device flow 采用 `/auth/device/authorizations*` 路径。
@@ -98,7 +103,7 @@ paths:
   /auth/register:
     post:
       tags: [auth]
-      summary: 注册 Human（A5）：带 invite_code 走邀请兑换；不带则为 bootstrap（仅当服务器无 human）
+      summary: 注册 Human（A5/ADR-0009）：带 registration_code 走注册码兑换（仅注册，不入伙）；不带则为 bootstrap（仅当服务器无 human）
       security: []
       operationId: register
       requestBody:
@@ -112,11 +117,12 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 8, maxLength: 72, description: 需含字母与数字 }
                 display_name: { type: string }
-                invite_code:
+                registration_code:
                   type: string
                   description: >
-                    一次性邀请码（XXXXX-XXXXX-XXXXX-XXXXX，比对前归一化：去分隔符+大写）。
-                    兑换即建号 + 入伙 + 建立 web 会话（docs/registration.md §4）。
+                    一次性注册邀请码（XXXXX-XXXXX-XXXXX-XXXXX，比对前归一化：去分隔符+大写）。
+                    兑换即建号 + 建立 web 会话，不加入任何 workspace——入伙走
+                    POST /invitations/redeem（docs/registration.md §4，ADR-0009）。
       responses:
         "201":
           description: "已注册（Set-Cookie: astral_session；响应 = Me + session，与 login 同形状）"
@@ -125,7 +131,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
-        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（四种失效统一防探测）或 VALIDATION_FAILED
+        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（查无/已用/撤销/过期/工作区码，统一防探测）或 VALIDATION_FAILED
         "403": { $ref: "#/components/responses/Error" }   # bootstrap 分支：已有 human，注册关闭
         "409": { $ref: "#/components/responses/Error" }   # EMAIL_TAKEN（此时邀请不消耗）
 
@@ -543,6 +549,8 @@ paths:
       summary: |
         workspace 容器的子任务集合 = 根层任务（parent_id 为空），仅此一层。
         子层用 GET /tasks/{task_id}/children 逐容器下钻（D15：不做全量平铺）。
+        集合按兄弟排序键 position 升序返回（2.2；cursor 为 position 键集分页，
+        对客户端不透明）。
       operationId: listWorkspaceChildren
       parameters:
         - { $ref: "#/components/parameters/TaskStatusFilter" }
@@ -685,7 +693,7 @@ paths:
       - { $ref: "#/components/parameters/WorkspaceId" }
     post:
       tags: [tasks]
-      summary: 批量移动任务到新父（全有或全无；子孙随 parent 语义自然跟随）
+      summary: 批量移动任务到新父并/或调整兄弟序位（全有或全无；子孙随 parent 语义自然跟随）
       operationId: moveTasks
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
@@ -699,7 +707,9 @@ paths:
           description: |
             整批移动成功（单事务）。items 按请求顺序返回移动后的任务全量。
             语义：parent_id=null 移到根层；不支持跨 workspace；移动任务到
-            自己的子孙下成环 → 400 整批不生效（批内互移参与统一环检测）。
+            自己的子孙下成环 → 400 整批不生效（批内互移参与统一环检测）；
+            可选 position 同时指定目标兄弟序位（2.2，同父移动 = 重排），
+            缺省追加末尾。
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TaskBatchResult" }
@@ -1276,7 +1286,7 @@ paths:
       - { $ref: "#/components/parameters/WorkspaceId" }
     post:
       tags: [workspaces]
-      summary: 签发一次性邀请码（A5；需 human session + workspace:manage_members，agent credential 403）
+      summary: 签发一次性工作区邀请码（A5/ADR-0009；需 human session + workspace:manage_members，agent credential 403；码供已注册用户经 /invitations/redeem 入伙）
       operationId: createInvitation
       requestBody:
         required: true
@@ -1285,7 +1295,7 @@ paths:
             schema: { $ref: "#/components/schemas/InvitationCreate" }
       responses:
         "201":
-          description: 已签发；code 明文仅本次返回，invite_url 为拼好的注册链接
+          description: 已签发；code 明文仅本次返回，invite_url 为拼好的入伙链接（/join?ws=）
           content:
             application/json:
               schema: { $ref: "#/components/schemas/InvitationCreated" }
@@ -1309,6 +1319,32 @@ paths:
         "400": { $ref: "#/components/responses/Error" }   # status 过滤值非法
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /invitations/redeem:
+    post:
+      tags: [workspaces]
+      summary: 凭工作区邀请码入伙（ADR-0009：工作区码=权限授予，任何已存在 human 可兑；
+        本人重复兑已兑码幂等 200；已是成员 409 ALREADY_MEMBER 且码不消耗）
+      operationId: redeemInvitation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, description: 一次性工作区邀请码（比对前归一化：去分隔符+大写） }
+      responses:
+        "200":
+          description: 已入伙（含幂等重试；返回 workspace 与生效角色）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationRedeemed" }
+        "400": { $ref: "#/components/responses/Error" }   # INVITE_INVALID（查无/已用/撤销/过期/注册码，统一防探测）或 VALIDATION_FAILED
+        "403": { $ref: "#/components/responses/Error" }   # agent credential：入伙是人的行为
 
   /invitations/{invitation_id}/revoke:
     post:
@@ -1515,29 +1551,29 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
 
-  /admin/invitations:
+  /admin/registration-invitations:
     post:
       tags: [admin]
-      summary: 签发平台级注册邀请（platform:users:manage；兑换后为普通 user，不入任何 workspace）
-      operationId: createPlatformInvitation
+      summary: 签发注册邀请（platform:users:manage；唯一注册资格来源——兑换后为普通 user，不入任何 workspace）
+      operationId: createRegistrationInvitation
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/PlatformInvitationCreate" }
+            schema: { $ref: "#/components/schemas/RegistrationInvitationCreate" }
       responses:
         "201":
           description: 已签发（code 明文仅本次返回）
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PlatformInvitationCreated" }
+              schema: { $ref: "#/components/schemas/RegistrationInvitationCreated" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
     get:
       tags: [admin]
-      summary: 平台邀请列表（platform:users:manage；id 降序游标分页；不回传 code）
-      operationId: listPlatformInvitations
+      summary: 注册邀请列表（platform:users:manage；id 降序游标分页；不回传 code）
+      operationId: listRegistrationInvitations
       parameters:
         - name: status
           in: query
@@ -1551,16 +1587,16 @@ paths:
           description: 邀请分页列表
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PlatformInvitationPage" }
+              schema: { $ref: "#/components/schemas/RegistrationInvitationPage" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
 
-  /admin/invitations/{invitation_id}/revoke:
+  /admin/registration-invitations/{invitation_id}/revoke:
     post:
       tags: [admin]
-      summary: 撤销平台邀请（platform:users:manage；重复撤销幂等 204）
-      operationId: revokePlatformInvitation
+      summary: 撤销注册邀请（platform:users:manage；重复撤销幂等 204）
+      operationId: revokeRegistrationInvitation
       parameters:
         - { name: invitation_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
       responses:
@@ -1670,7 +1706,7 @@ components:
     Id:
       type: string
       pattern: "^[a-z]{2,3}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/dvh/prs/msg/evt/cred/ses/dev/req/aud/apv/inv。
+      description: 不透明 ID：prefix_uuidv7。前缀 usr/agt/svc/srv/ws/tsk/tgp/tag/doc/cfl/dvh/prs/msg/evt/cred/ses/dev/req/aud/apv/inv/reg（reg=注册邀请，00019；存量注册邀请行残留 inv）。
       examples: ["ws_0192ab34-56cd-7ef8-9a01-234567890abc"]
 
     IdOrNull:
@@ -1697,7 +1733,8 @@ components:
         - TASK_ALREADY_CLAIMED
         - TAG_PROPOSAL_EXPIRED
         - APPROVAL_EXPIRED        # approval 过期或已裁决（409）
-        - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期统一此码（防探测，400）
+        - INVITE_INVALID          # 邀请码不存在/已兑换/已撤销/已过期/类型不符统一此码（防探测，400）
+        - ALREADY_MEMBER          # 兑码入伙时已是该 workspace 成员（409，ADR-0009）
         - EMAIL_TAKEN             # email 已被注册（409，仅邀请码验证通过后可达）
         - TAG_ALREADY_EXISTS
         - REVISION_CONFLICT
@@ -1940,7 +1977,7 @@ components:
             invite_url:
               type: string
               format: uri
-              description: "{WebBaseURL}/register?code=<code>；基址回退链 WebBaseURL→PublicURL→请求 Host"
+              description: "{WebBaseURL}/join?ws=<code>（面向已注册用户的入伙链接，ADR-0009）；基址回退链 WebBaseURL→PublicURL→请求 Host"
 
     InvitationPage:
       allOf:
@@ -1949,7 +1986,15 @@ components:
           properties:
             items: { type: array, items: { $ref: "#/components/schemas/Invitation" } }
 
-    PlatformInvitationCreate:
+    InvitationRedeemed:
+      type: object
+      required: [workspace, role]
+      properties:
+        workspace: { $ref: "#/components/schemas/Workspace" }
+        role: { $ref: "#/components/schemas/InvitationRole" }
+      description: POST /invitations/redeem 的入伙结果（幂等重试同形状）
+
+    RegistrationInvitationCreate:
       type: object
       properties:
         expires_in:
@@ -1959,7 +2004,7 @@ components:
           default: 604800
           description: 有效期（秒）；缺省 7 天，上限 30 天
 
-    PlatformInvitation:
+    RegistrationInvitation:
       type: object
       required: [id, status, created_by, created_at, expires_at]
       properties:
@@ -1974,26 +2019,26 @@ components:
         redeemed_by: { $ref: "#/components/schemas/IdOrNull" }
         redeemed_at: { $ref: "#/components/schemas/DateTimeOrNull" }
 
-    PlatformInvitationCreated:
+    RegistrationInvitationCreated:
       allOf:
-        - $ref: "#/components/schemas/PlatformInvitation"
+        - $ref: "#/components/schemas/RegistrationInvitation"
         - type: object
           required: [code, invite_url]
           properties:
             code:
               type: string
-              description: 邀请码明文（XXXXX-XXXXX-XXXXX-XXXXX，Crockford base32，100 bit 熵），仅签发响应返回一次
+              description: 注册邀请码明文（XXXXX-XXXXX-XXXXX-XXXXX，Crockford base32，100 bit 熵），仅签发响应返回一次
             invite_url:
               type: string
               format: uri
-              description: "{WebBaseURL}/register?code=<code>；基址回退链 WebBaseURL→PublicURL→请求 Host"
+              description: "{WebBaseURL}/register?code=<code>（注册链接，ADR-0009）；基址回退链 WebBaseURL→PublicURL→请求 Host"
 
-    PlatformInvitationPage:
+    RegistrationInvitationPage:
       allOf:
         - $ref: "#/components/schemas/PageMeta"
         - type: object
           properties:
-            items: { type: array, items: { $ref: "#/components/schemas/PlatformInvitation" } }
+            items: { type: array, items: { $ref: "#/components/schemas/RegistrationInvitation" } }
 
     TaskStatus:
       type: string
@@ -2044,6 +2089,13 @@ components:
         priority: { $ref: "#/components/schemas/TaskPriority" }
         assignee_actor_id: { $ref: "#/components/schemas/IdOrNull" }
         revision: { type: integer, format: int64 }
+        position:
+          type: integer
+          format: int64
+          description: |
+            兄弟排序键（2.2）：同一父容器子层内 0 起的序位，children 集合按
+            position 升序（同位 id 降序兜底）返回。创建=追加兄弟尾部；调整
+            走 move 端点的可选 position。恒填充。
         tags:
           type: array
           items: { $ref: "#/components/schemas/Tag" }
@@ -2145,6 +2197,14 @@ components:
           $ref: "#/components/schemas/IdOrNull"
           description: null = 移到根层；Id = 挂到该任务下（可为批内任务）
         expected_revision: { type: integer, format: int64, minimum: 1 }
+        position:
+          type: integer
+          minimum: 0
+          description: |
+            目标父容器子层中的 0 起下标（2.2）：任务插入到摘除前列表中该下标
+            当前元素之前，越界收敛到末尾；缺省 = 追加到末尾。同父移动先从原位
+            摘除再插入（position 以摘除前的兄弟列表为准）。items 按请求顺序
+            生效，后项的 position 相对其处理前的目标列表状态。负数 400。
 
     TaskMoveBatch:
       type: object

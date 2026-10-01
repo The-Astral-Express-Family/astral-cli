@@ -235,16 +235,16 @@ ASTRAL_TOKEN=...
 modulator docs/registration.md，协议快照 key_semantics.invite_register）：
 
 ```text
-astral register <url> --invite-code XXXXX-XXXXX-XXXXX-XXXXX [--email ... --password ... --display-name ...]
+astral register <url> --registration-code XXXXX-XXXXX-XXXXX-XXXXX [--email ... --password ... --display-name ...]
 astral register <url> --bootstrap ...     # 冷启动分支：服务器尚无 human 时建首个账号
 astral register <url> ... --no-login      # 只建号，不自动登录
 ```
 
 - **匿名端点**：经 discovery 后直接 POST，不带任何 Bearer（`ASTRAL_TOKEN`
   存在与否都不影响注册）。邀请码归一化（去 `-` + 大写）是服务端职责，CLI
-  原样传；`--invite-code` 与 `--bootstrap` 互斥（exit 2），两者都缺也是
+  原样传；`--registration-code` 与 `--bootstrap` 互斥（exit 2），两者都缺也是
   用法错误。
-- **交互补问**：stdin 为 TTY 时，缺失的 email / password / invite code 逐项
+- **交互补问**：stdin 为 TTY 时，缺失的 email / password / registration code 逐项
   提示（提示语走 stderr，`--json` 的 stdout 契约不受污染）；密码经
   `platform::readLineNoEcho` 不回显。非 TTY 下缺失即 USAGE（exit 2），
   机器调用不会被挂住。`--display-name` 纯旗标不补问（可选数据，事后

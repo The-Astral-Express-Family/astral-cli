@@ -1,8 +1,8 @@
 {
   "snapshot_version": 2,
   "source_repository": "The-Astral-Express-Family/astral-modulator",
-  "source_commit": "21f9104",
-  "published_at": "2026-09-30",
+  "source_commit": "3d479ae",
+  "published_at": "2026-10-01",
   "protocol_version": 2,
   "min_cli_protocol_version": 2,
   "files": {
@@ -12,7 +12,7 @@
     "well-known.json": "发现文档形状（protocol_version=2）",
     "MANIFEST.json": "本文件：快照元数据与语义速查（不参与契约测试比对）"
   },
-  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现。本快照 v2.6 刷新自 21f9104（租约时间维度拆除 + info.version 2.3.0；含并行合入的任务依赖 2.2 段）。**breaking（两仓锁定同步）**：lease/renew/release 端点移除，释放改 DELETE /tasks/{id}/claim；claim 移除 lease_seconds；Task 移除 lease；ErrorCode 移除 TASK_LEASE_EXPIRED；事件移除 task.lease.expired；capabilities features task_lease -> task_claim。",
+  "implemented_endpoints_note": "openapi 中所有路径均已在服务端注册且为真实实现。本快照 v2.7 刷新自 3d479ae（modulator PR #15：邀请双轨分离 ADR-0009 集成任务协议 2.4 基线）。在 v2.6 租约拆除之上叠加：register 字段 invite_code -> registration_code 且只查注册码表；新增 POST /invitations/redeem；/admin/invitations* -> /admin/registration-invitations*；ErrorCode +ALREADY_MEMBER；Task +position 与 move/batch 端点 position 入参（info.version 2.4.0）。",
   "key_semantics": {
     "task_tree_v2": "容器化（D15）：凡容器 GET/POST <container>/children——workspace 容器=根层（parent_id 为空），task 容器=直接子层；同参数（status/tag/assignee/limit/cursor）同响应（Task 页，行内恒带 tags 与 children_count）；cursor=id（UUIDv7 时间序）；集合只回传直接子层，不做全量平铺",
     "task_search": "GET /workspaces/{id}/task-search：平面查询（跨层级），regex/fuzzy 与结构化 tag/status/assignee 平权，至少一个条件（否则 400）；语义固定 权限->结构化->regex 过滤->fuzzy 排序->分页；fuzzy 时 items[].score；候选集封顶 2000（D7）；fuzzy-only 查询剔除 0 分行（F1）",
@@ -34,13 +34,13 @@
     "memory_prefix": "memory/ 前缀是 documents 端点内的保留子空间（M1）：该前缀读写要求 memory:read / memory:write scope（其余路径 document:*）；组织记忆 = 保留 workspace org-memory 下的 memory/** 文档；无独立 memory API",
     "pagination_envelope": "全部列表端点统一 {items,next_cursor} 信封（G1）：manifest（limit 缺省 200 上限 1000，游标=末行 path）/conflicts（共享 Limit 200）/workspace audit/admin audit/presence（next_cursor 恒 null，成员规模有界）",
     "version_negotiation": "R2：/api/v1 请求携带 X-Astral-Client-Version 头且低于 min_cli_protocol_version -> 400 CLIENT_VERSION_UNSUPPORTED；头缺失放行（契约是支持协商而非要求携带）；客户端应在首连前经 /.well-known/astral 自查版本；CLI 侧对本头的消费自本快照刷新轮起实装",
-    "invite_register": "POST /auth/register {invite_code, email, password, display_name}（邀请码注册，P1/P2 实装；CLI register 命令 = P3 属本仓）；INVITE_INVALID 对四种失效统一同码（防探测），EMAIL_TAKEN 仅在邀请码验证通过后可达；安全事件 security.invite.created/revoked/redeemed",
+    "invite_register": "POST /auth/register {registration_code, email, password, display_name}（注册码只建号不入伙，ADR-0009；CLI register 命令 flag --registration-code）；工作区码不能注册——错轨与查无/失效统一 INVITE_INVALID（防探测），EMAIL_TAKEN 仅在注册码验证通过后可达；已登录 human 兑工作区码入伙走 POST /invitations/redeem（本人幂等重试 200 / 已是成员 ALREADY_MEMBER 409）；安全事件 security.invite.created/revoked/redeemed",
     "audit_endpoints": "GET /workspaces/{id}/audit（workspace audit，outcome/actor/action 过滤）与 GET /admin/audit（平台级，RequireGlobal + platform:audit:read，含 workspace_id IS NULL 服务器级记录）；AuditEntry 含 request_id；login 成功不写 audit（sessions 即事实），认证失败写 audit（outcome=denied）",
     "capabilities": "GET /meta/capabilities features 至少含 task_claim、document_sync、task_batch 与 task_dependencies（2.3 起 task_lease 更名 task_claim）；客户端按 feature 判断能力，不猜测 server 实现版本",
     "rate_limit": "429 RATE_LIMITED + Retry-After 秒头（S5 实装）：敏感桶 10/min/IP（login/register/device 端点）；轮询桶 60/min/IP（device token 轮询，CLI interval=3s 必须容纳）；通用桶 300/min/actor；SSE 桶 30/min/actor（独立，重连风暴不占通用桶）；error.retryable=true",
     "admin_users": "GET /admin/users（不分页：契约注明平台用户量小）+ disable/enable/role-change（平台角色 admin/user，D16）",
     "task_batch": "任务批量管理（协议 2.1，task_batch）：POST /workspaces/{id}/task-trees 与 POST /tasks/{id}/task-trees（嵌套树批量创建，整批单事务全有或全无；≤50 棵根树、总节点 ≤200、深度 ≤8；响应 items 镜像请求树形，task 内含服务端 id）；POST /workspaces/{id}/tasks/move（批量换父：parent_id=null 回根层；逐项必带 expected_revision，409 details 带 task_id+current_revision；批内互移统一环检测；不支持跨 ws；子树恒跟随）；POST /workspaces/{id}/tasks/batch-update（同值批量改 status/priority/assignee，set 至少一项，assignee_actor_id=null 清空；批量取消= T1 软删语义）；三端点均整批单事务全有或全无，重试=整批重放；事件逐任务 emit 既有词表；audit 每批一条（task.batch_create/batch_move/batch_update）；建议整批携带确定性 Idempotency-Key",
-    "admin_invitations": "平台级注册邀请（2026-09-28）：POST /admin/invitations（签发，code 明文仅一次）/GET /admin/invitations（id 降序游标分页，不回传 code）/POST /admin/invitations/{id}/revoke（幂等 204）；授权复用 platform:users:manage；兑换走既有 POST /auth/register（invite_code 命中平台邀请则账号不入任何 workspace）",
+    "admin_invitations": "平台级注册邀请（ADR-0009 更名，2026-09-29）：POST /admin/registration-invitations（签发，code 明文仅一次）/GET /admin/registration-invitations（id 降序游标分页，不回传 code）/POST /admin/registration-invitations/{id}/revoke（幂等 204）；授权复用 platform:users:manage；仅管「允许注册」——工作区邀请走各 workspace 的 /workspaces/{id}/invitations，两轨彻底解耦；注册链接 {WebBaseURL}/register?code=<code>",
     "task_dependencies": "任务依赖边（协议 2.2，task_dependencies）：方向 from=依赖方（等待者）to=被依赖方（blocker）；kind=blocks 硬阻塞（PUT 时沿依赖链多分支防环）/relates 对称关联（不参与环）；端点 GET /tasks/{id}/dependencies（双向边全量，每方向上限 50）、PUT/DELETE /tasks/{id}/dependencies/{dep_id}（PUT 幂等：同边已存在 200 不 bump；DELETE 幂等 204，?kind= 缺省 blocks）；Task 恒填充 blocked_by/blocks/related（id 数组）；children/task-search 增 blocked=true（存在未 done 依赖，cancelled 不算完成）与 blocked_by=<id> 过滤；边写删两端各 bump revision + task.updated（data.dep_change）+ audit task.dependency.add/remove；依赖不拦截 claim/done",
     "claim": "POST /tasks/{id}/claim {expected_revision?}（2.3 起无 lease_seconds）：原子认领 = assignee 指派给自己 + 转 in_progress，持有至 release 或完成；竞争失败 409 TASK_ALREADY_CLAIMED；释放 = DELETE /tasks/{id}/claim（claimant 或 task:override；幂等 204）；无时间维度、无自动回收（死 agent 回收走人工 task:override）"
   },
@@ -54,7 +54,7 @@
     "Task 响应恒填充 tags（空数组兜底，修订 D11）与 children_count",
     "修复：search 结果行内联任务字段（v1 误包在 Task 键下）；tag 模块生产装配补接 DB（v1 全部 tag HTTP 端点 500）"
   ],
-  "synced_at": "2026-09-30",
+  "synced_at": "2026-10-01",
   "revisions": [
     {
       "date": "2026-09-10",
@@ -147,6 +147,18 @@
         "migration 00019 drop task_leases；服务端清扫器移除",
         "一并携带任务依赖段（PR #9，v2.5 已刷）与 info.version 重排 2.3.0（2.2 由依赖先占）",
         "protocol_version 维持 2；CLI 的 kProtocolVersion 不动"
+      ]
+    },
+    {
+      "date": "2026-10-01",
+      "label": "v2.7 快照刷新（邀请双轨分离 + 任务协议 2.4 集成）",
+      "from_commit": "21f9104",
+      "to_commit": "3d479ae",
+      "changes": [
+        "邀请双轨分离（modulator PR #15，ADR-0009，breaking）：register 字段 invite_code -> registration_code 且只查注册码表（工作区码注册 400 INVITE_INVALID）；新增 POST /invitations/redeem（幂等重试 200 / ALREADY_MEMBER 409 / agent 403）；/admin/invitations* -> /admin/registration-invitations*（schema PlatformInvitation* -> RegistrationInvitation*）；ID 前缀 +reg；工作区邀请链接改 /join?ws=",
+        "ErrorCode +ALREADY_MEMBER（error.schema.json 同步，含 notes）",
+        "兄弟排序（协议 2.4，随集成带入）：Task +position 恒填充；move 端点 items +可选 position；children 游标换 position 键集分页（不透明可透传）",
+        "CLI 侧 register 命令已适配（--registration-code，dev 侧 ebf86fd 与本合并收口）；lease/batch/dependencies 适配为 main 侧既有工作（v2.4-v2.6）"
       ]
     }
   ]

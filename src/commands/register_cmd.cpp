@@ -30,11 +30,13 @@ namespace {
 
 using nlohmann::json;
 
-// `astral register <server_url>` — 邀请码注册（modulator TODO §3 P3 移交项；
-// 契约：POST /auth/register，docs/registration.md §5.2）。带 invite_code 走
-// 邀请兑换，--bootstrap 走冷启动分支（服务器无 human 时才成功）；码的归一化
-// 在服务端做，CLI 原样传。注册成功只建立 web cookie 会话，CLI 无法消费，
-// 因此缺省自动衔接 device-flow login 换取可落盘的 token 对（--no-login 跳过）。
+// `astral register <server_url>` — 注册码注册（modulator TODO §3 P3 移交项；
+// 契约：POST /auth/register，docs/registration.md §5.2，ADR-0009 双轨分离）。
+// 带 registration_code 走注册码兑换（只建号，不入任何 workspace——入伙是
+// web 侧 /join 的工作区码事务，CLI 不涉及）；--bootstrap 走冷启动分支
+// （服务器无 human 时才成功）；码的归一化在服务端做，CLI 原样传。注册成功
+// 只建立 web cookie 会话，CLI 无法消费，因此缺省自动衔接 device-flow login
+// 换取可落盘的 token 对（--no-login 跳过）。
 
 std::string trimAscii(const std::string& value) {
     const auto notSpace = [](unsigned char ch) { return std::isspace(ch) == 0; };
@@ -119,12 +121,13 @@ ServerRejection parseRejection(const client::HttpResponse& response) {
             message += "; retry later";
         }
     } else if (rejection.code == "INVITE_INVALID") {
-        message = "invite code rejected (unknown, already used, revoked or expired)";
+        message = "registration code rejected (unknown, already used, revoked, expired or wrong "
+                  "code type)";
     } else if (rejection.code == "EMAIL_TAKEN") {
-        message = "email is already registered (the invite code was not consumed)";
+        message = "email is already registered (the registration code was not consumed)";
     } else if (response.status == 403) {
-        message = "registration closed: the server already has an account, an invite code is "
-                  "required (--invite-code)";
+        message = "registration closed: the server already has an account, a registration code "
+                  "is required (--registration-code)";
     } else {
         message = "registration rejected";
     }
@@ -157,7 +160,7 @@ class RegisterCommand final : public Command {
 public:
     const char* name() const override { return "register"; }
     const char* description() const override {
-        return "Create an account with an invite code (or bootstrap the first one)";
+        return "Create an account with a registration code (or bootstrap the first one)";
     }
 
     void configure(CLI::App& app) override {
@@ -170,23 +173,24 @@ public:
         app.add_option("--display-name", displayName_,
                        "Display name (optional; set later with `astral profile set`)");
         app.add_option(
-            "--invite-code", inviteCode_,
-            "One-time invite code XXXXX-XXXXX-XXXXX-XXXXX (required unless --bootstrap)");
+            "--registration-code", registrationCode_,
+            "One-time registration code XXXXX-XXXXX-XXXXX-XXXXX (required unless --bootstrap; "
+            "workspace invite codes cannot register)");
         app.add_flag("--bootstrap", bootstrap_,
-                     "No invite code: create the first account on an empty server")
-            ->excludes("--invite-code");
+                     "No registration code: create the first account on an empty server")
+            ->excludes("--registration-code");
         app.add_flag("--no-login", noLogin_,
                      "Only create the account; skip the automatic device-flow login");
     }
 
     int execute(const CommandContext& context) override {
         const std::string baseUrl = auth::resolveServerUrl(serverUrl_, context.server);
-        // 空串视为「未提供」：invite-code/display-name 的空值没有独立语义
+        // 空串视为「未提供」：registration-code/display-name 的空值没有独立语义
         // （profile set 的 --bio "" 清空语义不适用于此）。
         std::string email = email_;
         std::string password = password_;
         std::string displayName = displayName_;
-        std::string inviteCode = inviteCode_;
+        std::string registrationCode = registrationCode_;
 
         // Interactive fill-ins: only the required fields, and only when stdin
         // is a keyboard. Non-TTY callers (pipes, agents) get a usage error
@@ -201,8 +205,8 @@ public:
             if (password.empty()) {
                 password = promptPassword("password (8-72 chars, letters and digits): ");
             }
-            if (!bootstrap_ && inviteCode.empty()) {
-                inviteCode = promptLine("invite code: ");
+            if (!bootstrap_ && registrationCode.empty()) {
+                registrationCode = promptLine("registration code: ");
             }
         }
 
@@ -214,10 +218,10 @@ public:
             throw core::AstralError(core::Errc::Usage,
                                     "--password is required when stdin is not interactive");
         }
-        if (!bootstrap_ && inviteCode.empty()) {
-            throw core::AstralError(core::Errc::Usage,
-                                    "no invite code given: pass --invite-code <code>, or "
-                                    "--bootstrap to create the first account on an empty server");
+        if (!bootstrap_ && registrationCode.empty()) {
+            throw core::AstralError(
+                core::Errc::Usage, "no registration code given: pass --registration-code <code>, "
+                                   "or --bootstrap to create the first account on an empty server");
         }
 
         json body = json{{"email", email}, {"password", password}};
@@ -225,7 +229,7 @@ public:
             body["display_name"] = displayName;
         }
         if (!bootstrap_) {
-            body["invite_code"] = inviteCode;
+            body["registration_code"] = registrationCode;
         }
 
         // Anonymous endpoint: discovery for api base + protocol gate, then the
@@ -310,7 +314,7 @@ private:
     std::string email_;
     std::string password_;
     std::string displayName_;
-    std::string inviteCode_;
+    std::string registrationCode_;
     bool bootstrap_ = false;
     bool noLogin_ = false;
 };
