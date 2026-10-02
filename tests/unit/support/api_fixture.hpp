@@ -10,7 +10,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
-#include <iomanip>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -96,14 +95,12 @@ struct CwdGuard {
 };
 
 inline std::filesystem::path uniqueHome(const char* stem) {
-    // Each Catch2 case runs as its own ctest process. A per-process counter
-    // alone collides across cases, and pid is no fix either - Windows recycles
-    // pids fast enough that pid+counter collides across runs, at which point a
-    // stale credentials.json leaks into the "fresh" home (the test_profile_cmd
-    // flake). A per-process random nonce makes the name unique across runs;
-    // the counter keeps multiple homes per process ordered and readable in
-    // failure logs. Handed-out dirs are swept best-effort at process exit so
-    // temp never accumulates stale state to collide with in the first place.
+    // Each Catch2 case is its own ctest process; a counter alone collides
+    // across cases, and pid is no fix - Windows recycles pids fast enough
+    // that pid+counter collides across runs, and a stale credentials.json
+    // then leaks into the "fresh" home (the test_profile_cmd flake). A
+    // per-process random nonce + counter names homes uniquely across runs;
+    // handed-out dirs are swept best-effort at process exit.
     struct Homes {
         std::string nonce;
         std::vector<std::filesystem::path> dirs;
@@ -112,7 +109,7 @@ inline std::filesystem::path uniqueHome(const char* stem) {
         Homes() {
             std::random_device rd;
             std::ostringstream os;
-            os << std::hex << std::setw(8) << std::setfill('0') << rd() << rd();
+            os << std::hex << rd() << rd();
             nonce = os.str();
         }
         ~Homes() {
