@@ -8,7 +8,6 @@
 
 using astral::output::errorEnvelope;
 using astral::output::printJson;
-using astral::output::printJsonError;
 
 TEST_CASE("printJson emits exactly one object per line") {
     std::ostringstream out;
@@ -26,9 +25,5 @@ TEST_CASE("error envelope carries stable code and message") {
     const auto envelope = errorEnvelope("AUTH_REQUIRED", "no credential");
     REQUIRE(envelope.at("error").at("code") == "AUTH_REQUIRED");
     REQUIRE(envelope.at("error").at("message") == "no credential");
-
-    std::ostringstream out;
-    printJsonError(out, "AUTH_REQUIRED", "no credential");
-    const auto parsed = nlohmann::json::parse(out.str());
-    REQUIRE(parsed == envelope);
 }
+

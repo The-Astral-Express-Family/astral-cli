@@ -346,15 +346,4 @@ HttpResponse HttpClient::getToFile(const std::string& url,
     return response;
 }
 
-HttpResponse HttpClient::postJson(const std::string& url, const std::string& jsonBody,
-                                  std::optional<std::string> bearer) {
-    HttpRequest request;
-    request.method = "POST";
-    request.url = url;
-    request.body = jsonBody;
-    request.bearerToken = std::move(bearer);
-    request.headers.emplace_back("Content-Type", "application/json");
-    return send(request);
-}
-
 } // namespace astral::client

@@ -83,7 +83,6 @@ client::HttpResponse sessionPost(platform::CredentialStore& store, platform::Log
 // exact-name lookup over the API when only a name is known (flag/env path).
 // Missing or invisible workspaces throw WORKSPACE_NOT_FOUND.
 struct WorkspaceContext {
-    ServerInfo server;
     std::string workspaceId;
     std::string workspaceName;
 };

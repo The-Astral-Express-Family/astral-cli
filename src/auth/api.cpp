@@ -190,7 +190,6 @@ void throwApiError(const client::HttpResponse& response, const std::string& what
 
 WorkspaceContext resolveWorkspace(ApiSession& api, const LocalTarget& local) {
     WorkspaceContext context;
-    context.server = api.server();
     if (!local.workspaceId.empty()) {
         context.workspaceId = local.workspaceId;
         context.workspaceName = local.workspaceName;
