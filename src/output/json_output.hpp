@@ -16,7 +16,6 @@ namespace astral::output {
 //  - failures use the {"error":{"code","message"}} envelope;
 //  - never emit token material.
 void printJson(std::ostream& out, const nlohmann::json& value);
-void printJsonError(std::ostream& out, std::string_view code, std::string_view message);
 
 // Failure envelope builder; the single assembly point for {"error":{...}}.
 // request_id/retryable ride through when the failure carries protocol

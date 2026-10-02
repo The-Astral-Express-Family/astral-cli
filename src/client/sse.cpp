@@ -87,12 +87,5 @@ std::vector<Event> FrameParser::takeEvents() {
     return events;
 }
 
-void FrameParser::reset() {
-    buffer_.clear();
-    pendingId_.clear();
-    pendingName_.clear();
-    pendingDataLines_.clear();
-    ready_.clear();
-}
 
 } // namespace astral::client::sse

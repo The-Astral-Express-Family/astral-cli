@@ -83,24 +83,15 @@ struct ServerRejection {
 };
 
 ServerRejection parseRejection(const client::HttpResponse& response) {
+    const auth::ErrorEnvelope envelope = auth::parseErrorEnvelope(response);
     ServerRejection rejection;
-    try {
-        const json envelope = json::parse(response.body).at("error");
-        rejection.code = envelope.value("code", std::string());
-        rejection.message = envelope.value("message", std::string());
-        if (const auto it = envelope.find("details");
-            it != envelope.end() && it->is_object() && it->size() > 0) {
-            rejection.details = it->dump();
-        }
-        if (const auto it = envelope.find("request_id"); it != envelope.end() && it->is_string()) {
-            rejection.requestId = it->get<std::string>();
-        }
-        if (const auto it = envelope.find("retryable"); it != envelope.end() && it->is_boolean()) {
-            rejection.retryable = it->get<bool>();
-        }
-    } catch (const std::exception&) {
-        // Non-JSON body: status-only phrasing below still applies.
+    rejection.code = envelope.code;
+    rejection.message = envelope.message;
+    if (envelope.details.is_object() && !envelope.details.empty()) {
+        rejection.details = envelope.details.dump();
     }
+    rejection.requestId = envelope.requestId;
+    rejection.retryable = envelope.retryable;
     return rejection;
 }
 

@@ -32,6 +32,7 @@ namespace fs = std::filesystem;
 #include "core/version.hpp"
 #include "output/json_output.hpp"
 #include "platform/archive.hpp"
+#include "platform/file_read.hpp"
 #include "platform/self_update.hpp"
 #include "platform/user_dirs.hpp"
 
@@ -205,26 +206,12 @@ public:
             throw core::AstralError(core::Errc::UpdateIntegrity,
                                     "SHA256SUMS.txt has no entry for " + *assetName);
         }
-        std::ifstream archiveIn(archivePath, std::ios::binary);
-        if (!archiveIn) {
+        const auto archiveBytes = platform::readFileBinary(archivePath);
+        if (!archiveBytes) {
             throw core::AstralError(core::Errc::LocalWorkspaceError,
                                     "cannot read downloaded archive " + archivePath.string());
         }
-        std::string actualHash;
-        {
-            // GCC 13 -O3 对 istreambuf_iterator 有 -Wnull-dereference 误报
-            // （CI 的 -Werror 直接判死）；改用 seekg/tellg/read 读整个文件。
-            std::string bytes;
-            archiveIn.seekg(0, std::ios::end);
-            const auto size = archiveIn.tellg();
-            if (size > 0) {
-                bytes.resize(static_cast<std::size_t>(size));
-                archiveIn.seekg(0, std::ios::beg);
-                archiveIn.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-                bytes.resize(static_cast<std::size_t>(archiveIn.gcount()));
-            }
-            actualHash = picosha2::hash256_hex_string(bytes);
-        }
+        std::string actualHash = picosha2::hash256_hex_string(*archiveBytes);
         for (char& c : actualHash) {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }

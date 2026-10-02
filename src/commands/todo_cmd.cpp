@@ -1,9 +1,8 @@
 #include "commands/todo_cmd.hpp"
+#include "commands/tag_ref.hpp"
 
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +20,7 @@
 #include "output/render.hpp"
 #include "output/style.hpp"
 #include "platform/stdin.hpp"
+#include "platform/file_read.hpp"
 
 namespace astral::commands {
 
@@ -191,45 +191,6 @@ void printTaskDetail(std::ostream& out, const Painter& paint, const json& task) 
             start = end + 1;
         }
     }
-}
-
-// tag attach/detach 的 <tag> 参数解析，沿用 tags_cmd 的词典惯例（其
-// resolveTag 是文件内私有，此处同规则实现）：`tag_` 前缀直接当 id；否则对
-// GET /workspaces/{id}/tags 的词典做规范化名匹配（服务端 NFKC+lowercase，
-// 覆盖纯 ASCII 的 CLI 输入），找不到本地报 NotFound。
-struct TagRef {
-    std::string id;
-    std::string name;
-};
-
-TagRef resolveTagRef(const auth::ApiSession& api, const auth::WorkspaceContext& ws,
-                     const std::string& nameOrId) {
-    if (nameOrId.rfind("tag_", 0) == 0) {
-        return TagRef{nameOrId, ""};
-    }
-    client::HttpRequest request;
-    request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/tags");
-    const json page = json::parse(api.requireSuccess(std::move(request), "tag list").body);
-    std::string lower;
-    lower.reserve(nameOrId.size());
-    for (char c : nameOrId) {
-        lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    if (const auto it = page.find("items"); it != page.end() && it->is_array()) {
-        for (const auto& tag : *it) {
-            const std::string name = scalarOr(tag, "name");
-            std::string candidate;
-            candidate.reserve(name.size());
-            for (char c : name) {
-                candidate += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            }
-            if (candidate == lower) {
-                return TagRef{scalarOr(tag, "id"), name};
-            }
-        }
-    }
-    throw core::AstralError(core::Errc::NotFound,
-                            "tag '" + nameOrId + "' not found in this workspace");
 }
 
 // ---- the noun -----------------------------------------------------------
@@ -656,16 +617,10 @@ private:
         std::string content;
         if (treeFile_ == "-") {
             content = platform::readStdinBinary();
+        } else if (auto bytes = platform::readFileBinary(treeFile_)) {
+            content = std::move(*bytes);
         } else {
-            std::ifstream input(treeFile_, std::ios::binary);
-            if (!input) {
-                throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
-            }
-            // 分块读取（istreambuf_iterator 被 AGENTS.md 禁用）。
-            char buffer[8192];
-            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
-                content.append(buffer, static_cast<std::size_t>(input.gcount()));
-            }
+            throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
         }
         json parsed;
         try {
@@ -828,7 +783,7 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const TagRef tag = resolveTagRef(api, ws, tagArg_);
+        const TagRef tag = resolveTag(api, ws, tagArg_);
         // 不带 body（expected_revision 可选）：幂等挂载由服务端保证，不 bump revision。
         const client::HttpResponse response = auth::sendNoBody(
             api, "PUT", "/tasks/" + taskId_ + "/tags/" + tag.id, "task tag attach");
@@ -848,7 +803,7 @@ private:
         // D14 default-workspace hint from openWorkspace.
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        const TagRef tag = resolveTagRef(api, ws, tagArg_);
+        const TagRef tag = resolveTag(api, ws, tagArg_);
         auth::sendNoBody(api, "DELETE", "/tasks/" + taskId_ + "/tags/" + tag.id, "task tag detach");
 
         if (context.json) {
