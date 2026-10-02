@@ -206,7 +206,7 @@ public:
             throw core::AstralError(core::Errc::UpdateIntegrity,
                                     "SHA256SUMS.txt has no entry for " + *assetName);
         }
-        const auto archiveBytes = platform::readFileBinary(archivePath.string());
+        const auto archiveBytes = platform::readFileBinary(archivePath);
         if (!archiveBytes) {
             throw core::AstralError(core::Errc::LocalWorkspaceError,
                                     "cannot read downloaded archive " + archivePath.string());

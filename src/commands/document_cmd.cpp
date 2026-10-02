@@ -15,7 +15,6 @@
 #include "commands/document_cmd.hpp"
 
 #include <cstdint>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <set>

@@ -4,7 +4,7 @@
 
 namespace astral::platform {
 
-std::optional<std::string> readFileBinary(const std::string& path) {
+std::optional<std::string> readFileBinary(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         return std::nullopt;
