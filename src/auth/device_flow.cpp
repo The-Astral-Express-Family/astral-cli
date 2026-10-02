@@ -1,5 +1,7 @@
 #include "auth/device_flow.hpp"
 
+#include "auth/api.hpp"
+
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -21,12 +23,7 @@ constexpr std::chrono::seconds kSlowDownPenalty{5}; // RFC 8628 §3.2
 
 // Parses the error envelope {"error":{"code": ...}} of a non-2xx response.
 std::string errorCodeOf(const client::HttpResponse& response) {
-    try {
-        const json body = json::parse(response.body);
-        return body.at("error").value("code", std::string());
-    } catch (const std::exception&) {
-        return "";
-    }
+    return parseErrorEnvelope(response).code;
 }
 
 json parseObject(const client::HttpResponse& response, const std::string& what) {

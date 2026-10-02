@@ -206,31 +206,18 @@ BasePointer resolveBasePointer(const auth::ApiSession& api, const std::string& w
 // 里，throwApiError 会丢掉它——push/delete 落冲突时单独解析，给出可操作
 // 的下一步（conflicts show/resolve）；其余 409 照旧走 throwApiError。
 [[noreturn]] void throwConflictHint(const client::HttpResponse& response, const std::string& what) {
-    try {
-        const json envelope = json::parse(response.body).at("error");
-        const std::string conflictId =
-            envelope.value("details", json::object()).value("conflict_id", std::string());
-        if (envelope.value("code", std::string()) == "DOCUMENT_CONFLICT" && !conflictId.empty()) {
-            core::AstralError error{core::Errc::Conflict,
-                                    what + ": " + envelope.value("message", std::string()) +
-                                        " (conflict " + conflictId +
-                                        "; inspect with `astral document conflicts show " +
-                                        conflictId + "`)"};
-            std::optional<std::string> requestId;
-            if (auto it = envelope.find("request_id"); it != envelope.end() && it->is_string()) {
-                requestId = it->get<std::string>();
-            }
-            std::optional<bool> retryable;
-            if (auto it = envelope.find("retryable"); it != envelope.end() && it->is_boolean()) {
-                retryable = it->get<bool>();
-            }
-            error.withProtocol("DOCUMENT_CONFLICT", std::move(requestId), std::move(retryable));
-            throw error;
-        }
-    } catch (const core::AstralError&) {
-        throw;
-    } catch (const std::exception&) {
-        // 无 envelope 或形状不符：退回通用错误映射。
+    const auth::ErrorEnvelope envelope = auth::parseErrorEnvelope(response);
+    const std::string conflictId =
+        envelope.details.is_object() ? envelope.details.value("conflict_id", std::string())
+                                     : std::string();
+    if (envelope.code == "DOCUMENT_CONFLICT" && !conflictId.empty()) {
+        core::AstralError error{core::Errc::Conflict,
+                                what + ": " + envelope.message +
+                                    " (conflict " + conflictId +
+                                    "; inspect with `astral document conflicts show " +
+                                    conflictId + "`)"};
+        error.withProtocol("DOCUMENT_CONFLICT", envelope.requestId, envelope.retryable);
+        throw error;
     }
     auth::throwApiError(response, what);
 }

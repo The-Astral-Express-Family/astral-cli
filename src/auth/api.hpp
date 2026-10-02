@@ -104,6 +104,20 @@ openWorkspace(const std::optional<std::string>& flagServer,
 nlohmann::json fetchPageItems(const ApiSession& api, const std::string& path, std::string query,
                               bool followAll, const std::string& what, std::string& nextCursor);
 
+// Field-level view of the protocol error envelope (api/schemas/error.json):
+// the single parser for non-2xx bodies. Fields stay defaulted when the body
+// is not JSON or lacks an error object - callers then fall back to
+// status-only mapping.
+struct ErrorEnvelope {
+    std::string code;       // error.code ("" = absent)
+    std::string message;    // error.message ("" = absent)
+    nlohmann::json details; // error.details object as-is (null = absent)
+    std::optional<std::string> requestId;
+    std::optional<bool> retryable;
+};
+
+ErrorEnvelope parseErrorEnvelope(const client::HttpResponse& response);
+
 // Maps a non-2xx response to AstralError: exit code from the HTTP status,
 // message from the protocol envelope, and the server's error.code plus
 // request_id/retryable carried through for --json (ARCHITECTURE.md 12).
