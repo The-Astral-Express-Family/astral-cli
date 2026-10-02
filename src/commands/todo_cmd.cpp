@@ -22,6 +22,7 @@
 #include "output/render.hpp"
 #include "output/style.hpp"
 #include "platform/stdin.hpp"
+#include "platform/file_read.hpp"
 
 namespace astral::commands {
 
@@ -618,16 +619,10 @@ private:
         std::string content;
         if (treeFile_ == "-") {
             content = platform::readStdinBinary();
+        } else if (auto bytes = platform::readFileBinary(treeFile_)) {
+            content = std::move(*bytes);
         } else {
-            std::ifstream input(treeFile_, std::ios::binary);
-            if (!input) {
-                throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
-            }
-            // 分块读取（istreambuf_iterator 被 AGENTS.md 禁用）。
-            char buffer[8192];
-            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
-                content.append(buffer, static_cast<std::size_t>(input.gcount()));
-            }
+            throw core::AstralError(core::Errc::Usage, "cannot open '" + treeFile_ + "'");
         }
         json parsed;
         try {

@@ -33,6 +33,7 @@
 #include "output/json_output.hpp"
 #include "output/render.hpp"
 #include "platform/stdin.hpp"
+#include "platform/file_read.hpp"
 
 namespace astral::commands {
 
@@ -112,19 +113,12 @@ std::string loadContent(bool fileGiven, const std::string& file, bool bodyGiven,
     if (fileGiven) {
         if (file == "-") {
             content = platform::readStdinBinary();
+        } else if (auto bytes = platform::readFileBinary(file)) {
+            content = std::move(*bytes);
         } else {
-            std::ifstream input(file, std::ios::binary);
-            if (!input) {
-                throw core::AstralError(core::Errc::Usage, "cannot open '" + file + "'");
-            }
-            // 分块 append 而非 istreambuf_iterator 的 assign：gcc13 对后者的
-            // 库内联路径有 -Wnull-dereference 误报（CI arm -Werror 红源），
-            // 块状读取在任何流上都等价且无此告警面。
-            char buffer[8192];
-            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
-                content.append(buffer, static_cast<std::size_t>(input.gcount()));
-            }
+            throw core::AstralError(core::Errc::Usage, "cannot open '" + file + "'");
         }
+
     } else if (bodyGiven) {
         content = body;
     } else {

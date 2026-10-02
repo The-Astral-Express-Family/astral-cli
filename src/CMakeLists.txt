@@ -36,6 +36,7 @@ add_library(astral_core STATIC
   platform/archive.cpp
   platform/browser.cpp
   platform/credential_store.cpp
+  platform/file_read.cpp
   platform/self_update.cpp
   platform/args.cpp
   platform/atomic_file.cpp
