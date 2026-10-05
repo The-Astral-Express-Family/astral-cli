@@ -316,6 +316,22 @@ TEST_CASE("todo search with a structured filter alone is valid in v2") {
     REQUIRE(searchUrl.find("status=open") != std::string::npos);
 }
 
+TEST_CASE("todo search with --blocked-by alone satisfies the filter rule (2.6.1)") {
+    ApiFixture fx;
+    fx.fake().route("/task-search", 200, json{{"items", json::array()}, {"next_cursor", nullptr}});
+
+    const RunResult result =
+        runApp({"astral", "todo", "search", "--blocked-by", "task_9", "--json"});
+    REQUIRE(result.exitCode == 0);
+    std::string searchUrl;
+    for (const auto& request : fx.fake().requests) {
+        if (request.url.find("/task-search") != std::string::npos) {
+            searchUrl = request.url;
+        }
+    }
+    REQUIRE(searchUrl.find("blocked_by=task_9") != std::string::npos);
+}
+
 TEST_CASE("todo search encodes free-form query parameters") {
     ApiFixture fx;
     fx.fake().route("/task-search", 200, json{{"items", json::array()}, {"next_cursor", nullptr}});

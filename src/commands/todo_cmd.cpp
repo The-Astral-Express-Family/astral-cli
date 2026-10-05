@@ -472,12 +472,14 @@ private:
     }
 
     int runSearch(const CommandContext& context) {
-        // v2：结构化与内容过滤平权，至少其一（与服务端 400 守卫同语义）。
+        // v2：结构化与内容过滤平权，至少其一（与服务端 400 守卫同语义）；
+        // 2.6.1 起依赖过滤（--blocked/--blocked-by）单独即满足。
         if (regex_.empty() && fuzzy_.empty() && tag_.empty() && pageFlags_.status.empty() &&
-            assignee_.empty()) {
+            assignee_.empty() && !pageFlags_.blocked && pageFlags_.blockedBy.empty()) {
             throw core::AstralError(
                 core::Errc::Usage,
-                "todo search needs at least one of --regex/--fuzzy/--tag/--status/--assignee");
+                "todo search needs at least one of "
+                "--regex/--fuzzy/--tag/--status/--assignee/--blocked/--blocked-by");
         }
         // One session per run: discovery exactly once; unresolvable targets get the
         // D14 default-workspace hint from openWorkspace.
