@@ -290,7 +290,8 @@ public:
             ->required();
         addTree->add_option("--parent", parent_, "Create the trees under this task");
 
-        // v2.1：移动 = PATCH parent_id 三态；'-' 表示移回根层（null）。
+        // v2.6：移动走批端点 POST /tasks/move（其 parent_id=null 才是根层语义；
+        // PATCH /tasks/{id} 的 null 与缺席同义 = 不改，移不动根层）。
         CLI::App* move =
             app.add_subcommand("move", "Move a task under another container ('-' = root)");
         move->add_option("task_id", taskId_, "Task id")->required();
@@ -626,18 +627,28 @@ private:
         return 0;
     }
 
-    // runMove：PATCH parent_id 三态（'-' = null = 根层）；移动语义与字段
-    // 更新分属不同动词，与 update 共享 revision 节拍。
+    // runMove：POST 批量 move 端点（'-' = null = 根层）。契约对 move 的
+    // parent_id=null 明文「移到根层」；PATCH 的 null 语义是「不改」，
+    // 不能承载移层——移层走 move 端点（移动与字段更新分属不同动词）。
+    // 输出取 items[0]，保持单任务响应形状。
     int runMove(const CommandContext& context) {
         auto [api, ws] = auth::openWorkspace(context.server, context.workspace);
 
-        json body{{"expected_revision", expectedRevision(api)}};
-        if (moveTo_ == "-") {
-            body["parent_id"] = nullptr;
-        } else {
-            body["parent_id"] = moveTo_;
+        json parentId = nullptr;
+        if (moveTo_ != "-") {
+            parentId = moveTo_;
         }
-        const json task = auth::sendJson(api, "PATCH", "/tasks/" + taskId_, body, "task move");
+        const json body{{
+            "items",
+            json::array({json{
+                {"task_id", taskId_},
+                {"parent_id", parentId},
+                {"expected_revision", expectedRevision(api)},
+            }}),
+        }};
+        const json result = auth::sendJson(
+            api, "POST", "/workspaces/" + ws.workspaceId + "/tasks/move", body, "task move");
+        const json task = result.at("items").front();
 
         if (context.json) {
             output::printJson(context.out, task);
