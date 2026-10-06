@@ -15,7 +15,6 @@
 #include "commands/document_cmd.hpp"
 
 #include <cstdint>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <set>
@@ -32,6 +31,7 @@
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
+#include "platform/file_read.hpp"
 #include "platform/stdin.hpp"
 
 namespace astral::commands {
@@ -112,19 +112,12 @@ std::string loadContent(bool fileGiven, const std::string& file, bool bodyGiven,
     if (fileGiven) {
         if (file == "-") {
             content = platform::readStdinBinary();
+        } else if (auto bytes = platform::readFileBinary(file)) {
+            content = std::move(*bytes);
         } else {
-            std::ifstream input(file, std::ios::binary);
-            if (!input) {
-                throw core::AstralError(core::Errc::Usage, "cannot open '" + file + "'");
-            }
-            // 分块 append 而非 istreambuf_iterator 的 assign：gcc13 对后者的
-            // 库内联路径有 -Wnull-dereference 误报（CI arm -Werror 红源），
-            // 块状读取在任何流上都等价且无此告警面。
-            char buffer[8192];
-            while (input.read(buffer, sizeof buffer) || input.gcount() > 0) {
-                content.append(buffer, static_cast<std::size_t>(input.gcount()));
-            }
+            throw core::AstralError(core::Errc::Usage, "cannot open '" + file + "'");
         }
+
     } else if (bodyGiven) {
         content = body;
     } else {
@@ -206,31 +199,17 @@ BasePointer resolveBasePointer(const auth::ApiSession& api, const std::string& w
 // 里，throwApiError 会丢掉它——push/delete 落冲突时单独解析，给出可操作
 // 的下一步（conflicts show/resolve）；其余 409 照旧走 throwApiError。
 [[noreturn]] void throwConflictHint(const client::HttpResponse& response, const std::string& what) {
-    try {
-        const json envelope = json::parse(response.body).at("error");
-        const std::string conflictId =
-            envelope.value("details", json::object()).value("conflict_id", std::string());
-        if (envelope.value("code", std::string()) == "DOCUMENT_CONFLICT" && !conflictId.empty()) {
-            core::AstralError error{core::Errc::Conflict,
-                                    what + ": " + envelope.value("message", std::string()) +
-                                        " (conflict " + conflictId +
-                                        "; inspect with `astral document conflicts show " +
-                                        conflictId + "`)"};
-            std::optional<std::string> requestId;
-            if (auto it = envelope.find("request_id"); it != envelope.end() && it->is_string()) {
-                requestId = it->get<std::string>();
-            }
-            std::optional<bool> retryable;
-            if (auto it = envelope.find("retryable"); it != envelope.end() && it->is_boolean()) {
-                retryable = it->get<bool>();
-            }
-            error.withProtocol("DOCUMENT_CONFLICT", std::move(requestId), std::move(retryable));
-            throw error;
-        }
-    } catch (const core::AstralError&) {
-        throw;
-    } catch (const std::exception&) {
-        // 无 envelope 或形状不符：退回通用错误映射。
+    const auth::ErrorEnvelope envelope = auth::parseErrorEnvelope(response);
+    const std::string conflictId = envelope.details.is_object()
+                                       ? envelope.details.value("conflict_id", std::string())
+                                       : std::string();
+    if (envelope.code == "DOCUMENT_CONFLICT" && !conflictId.empty()) {
+        core::AstralError error{core::Errc::Conflict,
+                                what + ": " + envelope.message + " (conflict " + conflictId +
+                                    "; inspect with `astral document conflicts show " + conflictId +
+                                    "`)"};
+        error.withProtocol("DOCUMENT_CONFLICT", envelope.requestId, envelope.retryable);
+        throw error;
     }
     auth::throwApiError(response, what);
 }

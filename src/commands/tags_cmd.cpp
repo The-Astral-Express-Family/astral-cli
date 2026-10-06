@@ -1,4 +1,5 @@
 #include "commands/tags_cmd.hpp"
+#include "commands/tag_ref.hpp"
 
 #include <memory>
 #include <optional>
@@ -22,45 +23,6 @@ using nlohmann::json;
 using output::Painter;
 using output::printPageJson;
 using output::scalarOr;
-
-// Resolves a `<name-or-id>` argument to (id, canonical name). `tag_`-prefixed
-// arguments are taken as ids verbatim; otherwise the workspace tag dictionary
-// is matched case-insensitively by name (the server normalizes with
-// NFKC+lowercase, which covers the plain-ASCII CLI cases).
-struct TagRef {
-    std::string id;
-    std::string name;
-};
-
-TagRef resolveTag(const auth::ApiSession& api, const auth::WorkspaceContext& ws,
-                  const std::string& nameOrId) {
-    if (nameOrId.rfind("tag_", 0) == 0) {
-        return TagRef{nameOrId, ""};
-    }
-    client::HttpRequest request;
-    request.url = auth::apiUrl(api, "/workspaces/" + ws.workspaceId + "/tags");
-    const json page = json::parse(api.requireSuccess(std::move(request), "tag list").body);
-    std::string lower;
-    lower.reserve(nameOrId.size());
-    for (char c : nameOrId) {
-        lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    if (const auto it = page.find("items"); it != page.end() && it->is_array()) {
-        for (const auto& tag : *it) {
-            const std::string name = scalarOr(tag, "name");
-            std::string candidate;
-            candidate.reserve(name.size());
-            for (char c : name) {
-                candidate += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            }
-            if (candidate == lower) {
-                return TagRef{scalarOr(tag, "id"), name};
-            }
-        }
-    }
-    throw core::AstralError(core::Errc::NotFound,
-                            "tag '" + nameOrId + "' not found in this workspace");
-}
 
 // First step of the two-step flow; returns the frozen TagProposal shape
 // (proposal_id, confirm_code, expires_at, existing_tags).

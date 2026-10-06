@@ -72,8 +72,6 @@ public:
     HttpResponse send(const HttpRequest& request);
 
     HttpResponse get(const std::string& url, std::optional<std::string> bearer = std::nullopt);
-    HttpResponse postJson(const std::string& url, const std::string& jsonBody,
-                          std::optional<std::string> bearer = std::nullopt);
 
     // Streaming variant for long-lived endpoints (SSE). Every body chunk is
     // passed to onChunk as it arrives; a false return aborts the transfer and

@@ -15,14 +15,12 @@
 #include "core/error.hpp"
 #include "output/json_output.hpp"
 #include "output/render.hpp"
-#include "output/style.hpp"
 
 namespace astral::commands {
 
 namespace {
 
 using nlohmann::json;
-using output::Painter;
 using output::printMoreHint;
 using output::printPageJson;
 using output::scalarOr;

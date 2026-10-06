@@ -11,16 +11,12 @@
 
 #include <filesystem>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 #include <nlohmann/json.hpp>
 
@@ -99,17 +95,36 @@ struct CwdGuard {
 };
 
 inline std::filesystem::path uniqueHome(const char* stem) {
-    // ctest registers each Catch2 case as its own PROCESS, so a plain
-    // in-process counter collides across cases and leaks credentials.json /
-    // .astral bindings between them. Disambiguate by pid as well.
-    static int counter = 0;
-#ifdef _WIN32
-    const unsigned long pid = static_cast<unsigned long>(_getpid());
-#else
-    const unsigned long pid = static_cast<unsigned long>(getpid());
-#endif
-    return std::filesystem::temp_directory_path() /
-           (std::string(stem) + "-" + std::to_string(pid) + "-" + std::to_string(++counter));
+    // Each Catch2 case is its own ctest process; a counter alone collides
+    // across cases, and pid is no fix - Windows recycles pids fast enough
+    // that pid+counter collides across runs, and a stale credentials.json
+    // then leaks into the "fresh" home (the test_profile_cmd flake). A
+    // per-process random nonce + counter names homes uniquely across runs;
+    // handed-out dirs are swept best-effort at process exit.
+    struct Homes {
+        std::string nonce;
+        std::vector<std::filesystem::path> dirs;
+        int counter = 0;
+
+        Homes() {
+            std::random_device rd;
+            std::ostringstream os;
+            os << std::hex << rd() << rd();
+            nonce = os.str();
+        }
+        ~Homes() {
+            std::error_code ec;
+            for (const auto& dir : dirs) {
+                std::filesystem::remove_all(dir, ec); // best-effort; cwd/env are gone by now
+            }
+        }
+    };
+    static Homes homes;
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        (std::string(stem) + "-" + homes.nonce + "-" + std::to_string(++homes.counter));
+    homes.dirs.push_back(dir);
+    return dir;
 }
 
 // ---- scripted transport --------------------------------------------------

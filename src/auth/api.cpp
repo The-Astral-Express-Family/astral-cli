@@ -160,37 +160,41 @@ client::HttpResponse sessionPost(platform::CredentialStore& store, platform::Log
     return withLazyRefresh(store, http, session, call);
 }
 
-void throwApiError(const client::HttpResponse& response, const std::string& what) {
-    std::string protocolCode;
-    std::string detail;
-    std::optional<std::string> requestId;
-    std::optional<bool> retryable;
+ErrorEnvelope parseErrorEnvelope(const client::HttpResponse& response) {
+    ErrorEnvelope parsed;
     try {
         const json envelope = json::parse(response.body).at("error");
-        protocolCode = envelope.value("code", std::string());
-        detail = envelope.value("message", std::string());
+        parsed.code = envelope.value("code", std::string());
+        parsed.message = envelope.value("message", std::string());
+        if (auto it = envelope.find("details"); it != envelope.end() && it->is_object()) {
+            parsed.details = *it;
+        }
         if (auto it = envelope.find("request_id"); it != envelope.end() && it->is_string()) {
-            requestId = it->get<std::string>();
+            parsed.requestId = it->get<std::string>();
         }
         if (auto it = envelope.find("retryable"); it != envelope.end() && it->is_boolean()) {
-            retryable = it->get<bool>();
+            parsed.retryable = it->get<bool>();
         }
     } catch (const std::exception&) {
-        // Non-JSON or malformed body: fall through to status-only mapping.
+        // Non-JSON or malformed body: leave defaults; status-only mapping applies.
     }
-    std::string message = detail.empty()
+    return parsed;
+}
+
+void throwApiError(const client::HttpResponse& response, const std::string& what) {
+    const ErrorEnvelope envelope = parseErrorEnvelope(response);
+    std::string message = envelope.message.empty()
                               ? what + " failed with HTTP status " + std::to_string(response.status)
-                              : what + ": " + detail;
+                              : what + ": " + envelope.message;
     core::AstralError error{errcForStatus(response.status), std::move(message)};
-    if (!protocolCode.empty()) {
-        error.withProtocol(std::move(protocolCode), std::move(requestId), std::move(retryable));
+    if (!envelope.code.empty()) {
+        error.withProtocol(envelope.code, envelope.requestId, envelope.retryable);
     }
     throw error;
 }
 
 WorkspaceContext resolveWorkspace(ApiSession& api, const LocalTarget& local) {
     WorkspaceContext context;
-    context.server = api.server();
     if (!local.workspaceId.empty()) {
         context.workspaceId = local.workspaceId;
         context.workspaceName = local.workspaceName;

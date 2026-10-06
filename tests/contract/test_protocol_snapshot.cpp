@@ -49,40 +49,46 @@ nlohmann::json snapshotJson(const char* name) {
     return nlohmann::json::parse(snapshotFile(name));
 }
 
+// 存在性钉子的共用断言：每个 needle 必须以子串出现在冻结快照文本中。
+// 各 TEST_CASE 只声明针脚清单；读取与失败输出（INFO needle）在此一处。
+void requireAllPresent(const std::string& haystack, std::initializer_list<const char*> needles) {
+    for (const char* const needle : needles) {
+        INFO("needle: " << needle);
+        REQUIRE(haystack.find(needle) != std::string::npos);
+    }
+}
+
 } // namespace
 
 TEST_CASE("documents endpoints are pinned in the frozen snapshot") {
     const std::string openapi = snapshotFile("openapi.yaml");
     // 按值迭代 const char* 初始化列表：const std::string& 绑定 const char*
     // 临时量会触发 gcc 的 -Wrange-loop-construct（CI -Werror）。
-    for (const char* const needle : {
-             "/workspaces/{workspace_id}/documents/manifest:",
-             "/workspaces/{workspace_id}/documents/{path}:",
-             "/workspaces/{workspace_id}/conflicts:",
-             "/workspaces/{workspace_id}/conflicts/{conflict_id}:",
-             "/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:",
-             // v2.3（round 41）：history / get --revision 消费的历史链端点。
-             "/workspaces/{workspace_id}/document-versions:",
-             "/workspaces/{workspace_id}/document-versions/{revision}:",
-             "getDocumentManifest",
-             "pushDocument",
-             "deleteDocument",
-             "resolveConflict",
-             "listDocumentVersions",
-             "getDocumentVersion",
-             // 历史链 schema 名与 dvh 前缀（列表/详情形状 + ID 枚举）。
-             "DocumentVersion:",
-             "DocumentVersionDetail:",
-             "/dvh/",
-             // CLI 本地实现所依赖的语义标注（R1 大小写冲突与 R2 版本头的
-             // 约定在 modulator docs/protocol.md，不在本快照文件集内——
-             // 行为由单测覆盖，这里只钉 openapi 内的事实）。
-             "document_sync",       // capabilities feature
-             "sha256:[0-9a-f]{64}", // content_hash 形状
-         }) {
-        INFO("needle: " << needle);
-        REQUIRE(openapi.find(needle) != std::string::npos);
-    }
+    requireAllPresent(openapi, {
+                                   "/workspaces/{workspace_id}/documents/manifest:",
+                                   "/workspaces/{workspace_id}/documents/{path}:",
+                                   "/workspaces/{workspace_id}/conflicts:",
+                                   "/workspaces/{workspace_id}/conflicts/{conflict_id}:",
+                                   "/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:",
+                                   // v2.3（round 41）：history / get --revision 消费的历史链端点。
+                                   "/workspaces/{workspace_id}/document-versions:",
+                                   "/workspaces/{workspace_id}/document-versions/{revision}:",
+                                   "getDocumentManifest",
+                                   "pushDocument",
+                                   "deleteDocument",
+                                   "resolveConflict",
+                                   "listDocumentVersions",
+                                   "getDocumentVersion",
+                                   // 历史链 schema 名与 dvh 前缀（列表/详情形状 + ID 枚举）。
+                                   "DocumentVersion:",
+                                   "DocumentVersionDetail:",
+                                   "/dvh/",
+                                   // CLI 本地实现所依赖的语义标注（R1 大小写冲突与 R2 版本头的
+                                   // 约定在 modulator docs/protocol.md，不在本快照文件集内——
+                                   // 行为由单测覆盖，这里只钉 openapi 内的事实）。
+                                   "document_sync",       // capabilities feature
+                                   "sha256:[0-9a-f]{64}", // content_hash 形状
+                               });
     // push 幂等与 tombstone 语义必须有契约标注（CLI 依赖它们设计 key 与复活路径）。
     REQUIRE(openapi.find("Idempotency-Key") != std::string::npos);
     REQUIRE(openapi.find("base_revision") != std::string::npos);
@@ -90,79 +96,68 @@ TEST_CASE("documents endpoints are pinned in the frozen snapshot") {
 
 TEST_CASE("task batch endpoints are pinned in the frozen snapshot (v2.4)") {
     const std::string openapi = snapshotFile("openapi.yaml");
-    for (const char* const needle : {
-             "/workspaces/{workspace_id}/task-trees:",
-             "/tasks/{task_id}/task-trees:",
-             "/workspaces/{workspace_id}/tasks/move:",
-             "/workspaces/{workspace_id}/tasks/batch-update:",
-             "createTaskTrees",
-             "createChildTaskTrees",
-             "moveTasks",
-             "batchUpdateTasks",
-             // CLI 消费所依赖的 schema 名与上限语义（batch 路径/信封）。
-             "TaskTreeNode:",
-             "TaskTreeBatch:",
-             "TaskTreeBatchCreated:",
-             "TaskMoveBatch:",
-             "TaskBatchUpdate:",
-             "TaskBatchResult:",
-             "task_batch", // capabilities feature
-         }) {
-        INFO("needle: " << needle);
-        REQUIRE(openapi.find(needle) != std::string::npos);
-    }
+    requireAllPresent(openapi, {
+                                   "/workspaces/{workspace_id}/task-trees:",
+                                   "/tasks/{task_id}/task-trees:",
+                                   "/workspaces/{workspace_id}/tasks/move:",
+                                   "/workspaces/{workspace_id}/tasks/batch-update:",
+                                   "createTaskTrees",
+                                   "createChildTaskTrees",
+                                   "moveTasks",
+                                   "batchUpdateTasks",
+                                   // CLI 消费所依赖的 schema 名与上限语义（batch 路径/信封）。
+                                   "TaskTreeNode:",
+                                   "TaskTreeBatch:",
+                                   "TaskTreeBatchCreated:",
+                                   "TaskMoveBatch:",
+                                   "TaskBatchUpdate:",
+                                   "TaskBatchResult:",
+                                   "task_batch", // capabilities feature
+                               });
 }
 
 TEST_CASE("lease removal is pinned in the frozen snapshot (v2.6)") {
     const std::string openapi = snapshotFile("openapi.yaml");
     // 2.3 租约拆除：释放走 DELETE /tasks/{id}/claim；旧租约端点必须不复存在。
-    for (const char* const needle : {"releaseClaim", "task_claim"}) {
-        INFO("needle: " << needle);
-        REQUIRE(openapi.find(needle) != std::string::npos);
-    }
+    requireAllPresent(openapi, {"releaseClaim", "task_claim"});
     REQUIRE(openapi.find("/tasks/{task_id}/lease/renew:") == std::string::npos);
     REQUIRE(openapi.find("TASK_LEASE_EXPIRED") == std::string::npos);
 }
 
 TEST_CASE("task dependency endpoints are pinned in the frozen snapshot (v2.5)") {
     const std::string openapi = snapshotFile("openapi.yaml");
-    for (const char* const needle : {
-             "/tasks/{task_id}/dependencies:",
-             "/tasks/{task_id}/dependencies/{dependency_task_id}:",
-             "listTaskDependencies",
-             "addTaskDependency",
-             "removeTaskDependency",
-             // CLI 消费所依赖的 schema 名与视图字段（show 渲染与 list 过滤）。
-             "DependencyEdge:",
-             "DependencyList:",
-             "blocked_by:",
-             "TaskBlockedFilter:",
-             "TaskBlockedByFilter:",
-             "task_dependencies", // capabilities feature
-         }) {
-        INFO("needle: " << needle);
-        REQUIRE(openapi.find(needle) != std::string::npos);
-    }
+    requireAllPresent(openapi,
+                      {
+                          "/tasks/{task_id}/dependencies:",
+                          "/tasks/{task_id}/dependencies/{dependency_task_id}:",
+                          "listTaskDependencies",
+                          "addTaskDependency",
+                          "removeTaskDependency",
+                          // CLI 消费所依赖的 schema 名与视图字段（show 渲染与 list 过滤）。
+                          "DependencyEdge:",
+                          "DependencyList:",
+                          "blocked_by:",
+                          "TaskBlockedFilter:",
+                          "TaskBlockedByFilter:",
+                          "task_dependencies", // capabilities feature
+                      });
 }
 
 TEST_CASE("password reset + invitation email are pinned in the frozen snapshot (v2.8)") {
     const std::string openapi = snapshotFile("openapi.yaml");
-    for (const char* const needle : {
-             // 00023 忘记密码两端点为 web 消费（CLI 不调用，device flow 不
-             // 涉密码）；钉住是为了冻结面完整——错误码参与全局 429 敏感桶
-             // 语义（CLI 同桶），漂移时这里先红。
-             "/auth/password-reset:",
-             "/auth/password-reset/confirm:",
-             "requestPasswordReset",
-             "confirmPasswordReset",
-             "PASSWORD_RESET_INVALID",
-             // 00024 邀请邮件：链接与站内码同一行同一生命周期（email_sent_at
-             // 缺席 = 未送达）；CLI 不消费，契约完整性钉子。
-             "email_sent_at:",
-         }) {
-        INFO("needle: " << needle);
-        REQUIRE(openapi.find(needle) != std::string::npos);
-    }
+    requireAllPresent(openapi, {
+                                   // 00023 忘记密码两端点为 web 消费（CLI 不调用，device flow 不
+                                   // 涉密码）；钉住是为了冻结面完整——错误码参与全局 429 敏感桶
+                                   // 语义（CLI 同桶），漂移时这里先红。
+                                   "/auth/password-reset:",
+                                   "/auth/password-reset/confirm:",
+                                   "requestPasswordReset",
+                                   "confirmPasswordReset",
+                                   "PASSWORD_RESET_INVALID",
+                                   // 00024 邀请邮件：链接与站内码同一行同一生命周期（email_sent_at
+                                   // 缺席 = 未送达）；CLI 不消费，契约完整性钉子。
+                                   "email_sent_at:",
+                               });
 }
 
 TEST_CASE("error enum covers the codes this CLI branches on") {
