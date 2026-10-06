@@ -625,23 +625,27 @@ TEST_CASE("todo tag detach human output names the resolved tag") {
 
 // ---- v2.4 task batch (task-trees / move / batch done) --------------------
 
-TEST_CASE("todo move posts parent_id three-state via PATCH") {
+TEST_CASE("todo move posts the parent through the batch move endpoint") {
     ApiFixture fx;
     json moved = kTaskOne;
     moved["parent_id"] = "task_2";
     moved["revision"] = 4;
     fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
-    fx.fake().route("/tasks/task_1", 200, moved);    // PATCH reply
+    const json moveResult = json{{"items", json::array({moved})}};
+    fx.fake().route("/workspaces/ws_1/tasks/move", 200, moveResult); // POST reply
 
     const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "task_2"});
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.out.find("Moved task_1 -> task_2") != std::string::npos);
 
-    const client::HttpRequest& patch = fx.fake().requests.back();
-    REQUIRE(patch.method == "PATCH");
-    const json body = json::parse(patch.body);
-    REQUIRE(body.at("parent_id") == "task_2");
-    REQUIRE(body.at("expected_revision") == 3);
+    const client::HttpRequest& post = fx.fake().requests.back();
+    REQUIRE(post.method == "POST");
+    REQUIRE(post.url.find("/workspaces/ws_1/tasks/move") != std::string::npos);
+    const json body = json::parse(post.body);
+    REQUIRE(body.at("items").size() == 1);
+    REQUIRE(body.at("items").at(0).at("task_id") == "task_1");
+    REQUIRE(body.at("items").at(0).at("parent_id") == "task_2");
+    REQUIRE(body.at("items").at(0).at("expected_revision") == 3);
 }
 
 TEST_CASE("todo move --to - moves back to the workspace root with null") {
@@ -649,14 +653,15 @@ TEST_CASE("todo move --to - moves back to the workspace root with null") {
     json rooted = kTaskOne;
     rooted["parent_id"] = nullptr;
     fx.fake().route("/tasks/task_1", 200, kTaskOne); // revision read
-    fx.fake().route("/tasks/task_1", 200, rooted);   // PATCH reply
+    const json moveResult = json{{"items", json::array({rooted})}};
+    fx.fake().route("/workspaces/ws_1/tasks/move", 200, moveResult); // POST reply
 
     const RunResult result = runApp({"astral", "todo", "move", "task_1", "--to", "-"});
     REQUIRE(result.exitCode == 0);
     REQUIRE(result.out.find("workspace root") != std::string::npos);
 
     const json body = json::parse(fx.fake().requests.back().body);
-    REQUIRE(body.at("parent_id").is_null());
+    REQUIRE(body.at("items").at(0).at("parent_id").is_null());
 }
 
 TEST_CASE("todo done with multiple ids batches through batch-update") {
