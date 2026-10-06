@@ -26,4 +26,3 @@ TEST_CASE("error envelope carries stable code and message") {
     REQUIRE(envelope.at("error").at("code") == "AUTH_REQUIRED");
     REQUIRE(envelope.at("error").at("message") == "no credential");
 }
-

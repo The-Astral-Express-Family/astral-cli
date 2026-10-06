@@ -19,8 +19,8 @@
 #include "output/json_output.hpp"
 #include "output/render.hpp"
 #include "output/style.hpp"
-#include "platform/stdin.hpp"
 #include "platform/file_read.hpp"
+#include "platform/stdin.hpp"
 
 namespace astral::commands {
 

@@ -24,5 +24,4 @@ void printJson(std::ostream& out, const nlohmann::json& value) {
     out << value.dump() << '\n';
 }
 
-
 } // namespace astral::output

@@ -87,5 +87,4 @@ std::vector<Event> FrameParser::takeEvents() {
     return events;
 }
 
-
 } // namespace astral::client::sse

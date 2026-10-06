@@ -120,9 +120,9 @@ inline std::filesystem::path uniqueHome(const char* stem) {
         }
     };
     static Homes homes;
-    const auto dir = std::filesystem::temp_directory_path() /
-                     (std::string(stem) + "-" + homes.nonce + "-" +
-                      std::to_string(++homes.counter));
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        (std::string(stem) + "-" + homes.nonce + "-" + std::to_string(++homes.counter));
     homes.dirs.push_back(dir);
     return dir;
 }

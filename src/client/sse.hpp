@@ -28,7 +28,6 @@ public:
     // The id of the last dispatched event, for Last-Event-ID on reconnect.
     const std::string& lastEventId() const { return lastEventId_; }
 
-
 private:
     void processLine(std::string_view line);
     void dispatch();
