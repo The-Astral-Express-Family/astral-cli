@@ -472,7 +472,8 @@ workspace 根层，`--parent <task-id>` 切到该任务的 children 集合（只
 子层，行内带 tags/children_count）；`todo add --parent <task-id>` 投递进该
 任务的 children 集合（服务端 TaskCreate 已无 parent_id 字段）；`todo search`
 走 `/workspaces/{id}/task-search` 平面查询，regex/fuzzy 与
-tag/status/assignee 平权（至少一个条件）。
+tag/status/assignee/blocked/blocked_by 平权（至少一个条件；2.6.1 起
+`--blocked`/`--blocked-by` 单独即满足）。
 
 批量管理（2026-09-30，协议快照 v2.4 / 服务端 task_batch）：`todo add-tree`
 读嵌套 JSON（`{"trees":[...]}` 或裸数组，`--file -` 走 stdin）一次投递整批

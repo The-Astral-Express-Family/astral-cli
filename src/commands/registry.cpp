@@ -34,7 +34,12 @@ public:
     const char* description() const override { return description_; }
 
     void configure(CLI::App& app) override {
-        app.require_subcommand(1);
+        // 零子命令的名词桩（如 status）不能 require_subcommand：CLI11 会
+        // 先抛 "A subcommand is required"（误导为用法错误），永远到不了
+        // execute() 的 COMMAND_NOT_IMPLEMENTED。仅在确有子命令时要求。
+        if (!subcommands_.empty()) {
+            app.require_subcommand(1);
+        }
         for (const std::string& subcommand : subcommands_) {
             app.add_subcommand(subcommand,
                                std::string("'astral ") + name_ + " " + subcommand + "' (planned)");

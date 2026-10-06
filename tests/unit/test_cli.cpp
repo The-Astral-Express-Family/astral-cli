@@ -77,6 +77,22 @@ TEST_CASE("stub commands fail with a stable JSON error code") {
     REQUIRE(payload.at("error").at("code") == "COMMAND_NOT_IMPLEMENTED");
 }
 
+TEST_CASE("zero-subcommand stub nouns reach execute, not a usage error") {
+    // status 在帮助里列出但没有子命令：修复前 CLI11 的 require_subcommand
+    // 先抛 "A subcommand is required"（误导为用法错误）。
+    const auto result = runApp({"astral", "status", "--json"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::GenericFailure));
+
+    const auto payload = nlohmann::json::parse(result.out);
+    REQUIRE(payload.at("error").at("code") == "COMMAND_NOT_IMPLEMENTED");
+}
+
+TEST_CASE("bare noun stub with subcommands still requires one") {
+    // workspace/agent 桩保留 require_subcommand:裸名词仍是用法错误。
+    const auto result = runApp({"astral", "workspace"});
+    REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
+}
+
 TEST_CASE("login without server argument is a usage error") {
     const auto result = runApp({"astral", "login"});
     REQUIRE(result.exitCode == static_cast<int>(astral::core::ExitCode::Usage));
